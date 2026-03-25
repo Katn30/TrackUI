@@ -533,13 +533,13 @@ describe("TrackedCollection", () => {
   describe("dirty state", () => {
     it("becomes clean after afterCommit", () => {
       collection.push(4);
-      tracker.afterCommit();
+      tracker.onCommit();
       expect(tracker.isDirty).toBe(false);
     });
 
     it("is dirty again after further changes post-save", () => {
       collection.push(4);
-      tracker.afterCommit();
+      tracker.onCommit();
       collection.push(5);
       expect(tracker.isDirty).toBe(true);
     });
@@ -548,7 +548,7 @@ describe("TrackedCollection", () => {
       const states: boolean[] = [];
       tracker.isDirtyChanged.subscribe((v) => states.push(v));
       collection.push(4);
-      tracker.afterCommit();
+      tracker.onCommit();
       expect(states).toEqual([true, false]);
     });
   });

@@ -1,0 +1,77 @@
+digraph ObjectState {
+    rankdir=LR
+    fontname="Helvetica"
+    node [fontname="Helvetica" fontsize=11 shape=ellipse]
+    edge [fontname="Helvetica" fontsize=9]
+
+    // ── start ─────────────────────────────────────────────────────
+    __start__ [shape=point width=0.2]
+
+    // ── active states ─────────────────────────────────────────────
+    New    [style=filled fillcolor="#AED6F1"
+            label="New\nneeds INSERT"]
+
+    Unchanged [style=filled fillcolor="#A9DFBF"
+               label="Unchanged\nno action"]
+
+    Edited [style="filled,dashed" fillcolor="#FAD7A0"
+            label="Edited *\nneeds Close+INSERT\n\n* derived: Unchanged + isDirty"]
+
+    Deleted [style=filled fillcolor="#F1948A"
+             label="Deleted\nneeds SOFT DELETE"]
+
+    // ── reverted states ───────────────────────────────────────────
+    InsertReverted [style=filled fillcolor="#D2B4DE"
+                    label="InsertReverted\nneeds HARD DELETE"]
+
+    EditReverted [style=filled fillcolor="#D2B4DE"
+                  label="EditReverted\nneeds HARD DELETE new\n+ REOPEN old"]
+
+    DeleteReverted [style=filled fillcolor="#D2B4DE"
+                    label="DeleteReverted\nneeds REOPEN"]
+
+    // ── layout hints ──────────────────────────────────────────────
+    { rank=source; __start__; New }
+    { rank=same;   Edited; Unchanged }
+    { rank=same;   InsertReverted; EditReverted; DeleteReverted }
+
+    // ── creation ──────────────────────────────────────────────────
+    __start__ -> New [label="new TrackedObject()"]
+
+    // ── prop changes ──────────────────────────────────────────────
+    New     -> New     [label="prop change" style=dashed color="#999999" fontcolor="#999999"]
+    Edited  -> Edited  [label="prop±"       style=dashed color="#999999" fontcolor="#999999"]
+    Edited  -> Unchanged [label="undo (all props)" color="#555555" fontcolor="#555555"]
+    Unchanged -> Edited  [label="prop change"]
+
+    // ── collection mutations ───────────────────────────────────────
+    New     -> Unchanged [label="remove()\n[never saved]"  color="#555555" fontcolor="#555555"]
+    Unchanged -> Deleted [label="remove()"]
+    Edited    -> Deleted [label="remove()"]
+
+    // ── undo of remove (before any save) ──────────────────────────
+    Unchanged -> New     [label="undo remove\n[was New]"       color="#555555" fontcolor="#555555"]
+    Deleted -> Unchanged [label="undo remove\n[was Unchanged]" color="#555555" fontcolor="#555555"]
+    Deleted -> Edited    [label="undo remove\n[was Edited]"    color="#555555" fontcolor="#555555"]
+
+    // ── afterCommit() — always → Unchanged ────────────────────────
+    edge [color="darkgreen" fontcolor="darkgreen"]
+    New            -> Unchanged [label="afterCommit()"]
+    Edited         -> Unchanged [label="afterCommit()"]
+    Deleted        -> Unchanged [label="afterCommit()"]
+    InsertReverted -> Unchanged [label="afterCommit()"]
+    EditReverted   -> Unchanged [label="afterCommit()"]
+    DeleteReverted -> Unchanged [label="afterCommit()"]
+
+    // ── undo of save → *Reverted ──────────────────────────────────
+    edge [color="darkorange" fontcolor="darkorange"]
+    Unchanged -> InsertReverted [label="undo\n[saved New or InsertReverted]"]
+    Unchanged -> EditReverted   [label="undo\n[saved Edited or EditReverted]"]
+    Unchanged -> DeleteReverted [label="undo\n[saved Deleted or DeleteReverted]"]
+
+    // ── redo (only valid if no save happened since the undo) ───────
+    edge [color="steelblue" fontcolor="steelblue"]
+    InsertReverted -> Unchanged [label="redo"]
+    EditReverted   -> Unchanged [label="redo"]
+    DeleteReverted -> Unchanged [label="redo"]
+}

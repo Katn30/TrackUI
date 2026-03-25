@@ -1,4 +1,4 @@
-export interface ExternallyAssignment {
+export interface ExternalAssignment {
   placeholder: number;
   value: number;
 }

@@ -31,6 +31,7 @@ import {
   InitializeTracked,
   Tracked,
   TrackedCollection,
+  ObjectState,
 } from 'trackui';
 
 const tracker = new Tracker();
@@ -105,7 +106,6 @@ This nesting is detected automatically. No extra API is needed.
 Rapid consecutive writes to the same `string` or `number` property on the same model are merged into a single undo step when they fall within the `coalescingWindowMs` threshold passed to the `Tracker` constructor (default: `3000` ms). Pass `undefined` to disable coalescing entirely.
 
 ```typescript
-```typescript
 invoice.status = 'd';
 invoice.status = 'dr';
 invoice.status = 'dra';
@@ -161,12 +161,12 @@ Calling `undo()` or `redo()` when the respective flag is `false` is a no-op.
 **Commit lifecycle**
 
 ```typescript
-tracker.afterCommit();           // mark current state as committed — isDirty → false
-tracker.afterCommit(keys);       // same, plus swap placeholder IDs for real server IDs
-tracker.beforeCommit();          // assign temporary negative IDs to new models before committing
+tracker.onCommit();           // mark current state as committed — isDirty → false
+tracker.onCommit(keys);       // same, plus swap placeholder IDs for real server IDs
+tracker.beforeCommit();       // assign temporary negative IDs to new models before committing
 ```
 
-`afterCommit()` also resets the placeholder ID counter to `-1` so the next commit cycle starts fresh.
+`onCommit()` automatically transitions every tracked object's `state` to `Unchanged` and appends the state change into the existing last undo operation — so undo atomically reverts both the user's edits and the committed state together (no spurious extra undo steps).
 
 **Tracking suppression**
 
@@ -213,8 +213,114 @@ The `@InitializeTracked` decorator:
 | `dirtyCounter` | `number` | Net number of tracked changes since last save. Increments on every tracked write, decrements on undo |
 | `isValid` | `boolean` | `true` when all `@Tracked()` validators pass |
 | `validationMessages` | `Map<string, string>` | Maps property name → error message for each failing validator |
+| `state` | `ObjectState` | Computed DB operation required at save time (see `ObjectState` below) |
+| `_committedState` | `ObjectState` | The persisted state (write with `withTrackingSuppressed` when loading from DB) |
 | `destroy()` | `void` | Removes this model from the tracker |
-| `onCommitted()` | `void` | Called automatically by `tracker.afterCommit()` — resets `dirtyCounter` to `0` |
+| `onCommitted()` | `void` | Called automatically by `tracker.onCommit()` — resets `dirtyCounter` to `0` |
+
+---
+
+### `ObjectState`
+
+Encodes exactly what DB operation each tracked object requires at save time. Read via `obj.state`.
+
+```typescript
+import { ObjectState } from 'trackui';
+```
+
+| Value | Meaning | Required DB operation |
+|---|---|---|
+| `New` | Created by user, never saved | INSERT |
+| `Unchanged` | Loaded from DB or just saved — no pending action | — |
+| `Edited` | `Unchanged` + unsaved property changes (derived) | Close + INSERT |
+| `Deleted` | Removed from a `TrackedCollection` | SOFT DELETE |
+| `InsertReverted` | A saved insert was undone | HARD DELETE |
+| `EditReverted` | A saved edit was undone | HARD DELETE new version + REOPEN previous version |
+| `DeleteReverted` | A saved delete was undone | REOPEN |
+
+`Edited` is **derived**: when `_committedState === Unchanged` and the object has unsaved property changes (`isDirty === true`), `state` returns `Edited`. It is never stored directly.
+
+**Loading from DB — marking an object as Unchanged:**
+
+```typescript
+tracker.withTrackingSuppressed(() => {
+  const order = new OrderModel(tracker);
+  order._committedState = ObjectState.Unchanged;
+  order.description = 'Widget'; // direct write, not tracked
+});
+```
+
+**Saving — state transitions are automatic:**
+
+Call `tracker.onCommit()` after a successful save. It automatically transitions every tracked object to `Unchanged` and appends the state change into the user's last undo operation — undo atomically reverts both the user's changes and the save state together.
+
+```typescript
+// Read states before sending to the server:
+for (const obj of tracker.trackedObjects) {
+  switch (obj.state) {
+    case ObjectState.New:            /* INSERT */ break;
+    case ObjectState.Edited:         /* Close + INSERT */ break;
+    case ObjectState.Deleted:        /* SOFT DELETE */ break;
+    case ObjectState.InsertReverted: /* HARD DELETE */ break;
+    case ObjectState.EditReverted:   /* HARD DELETE new + REOPEN previous */ break;
+    case ObjectState.DeleteReverted: /* REOPEN */ break;
+    case ObjectState.Unchanged:      break;
+  }
+}
+
+// After the server confirms success:
+tracker.onCommit(); // all objects → Unchanged; isDirty → false
+```
+
+**Versioned vs non-versioned databases:**
+
+`obj.state` is designed for **versioned (temporal) databases** where records are never modified in-place — edits close the current row and insert a new version, and deletes are soft. The `*Reverted` states are necessary here because undoing a save requires distinct DB operations:
+
+| State | Versioned DB action |
+|---|---|
+| `InsertReverted` | HARD DELETE the inserted row |
+| `EditReverted` | HARD DELETE the new row + REOPEN the previous row |
+| `DeleteReverted` | REOPEN (clear end date / restore) |
+
+For **non-versioned (standard CRUD) databases**, the `*Reverted` states map to simpler equivalents. Use `obj.nonVersionedState()` instead of `obj.state`:
+
+| State | Equivalent | Non-versioned DB action |
+|---|---|---|
+| `InsertReverted` | `Deleted` | DELETE the row |
+| `EditReverted` | `Edited` | UPDATE with current (reverted) values |
+| `DeleteReverted` | `Edited` (soft-delete) or `New` (hard-delete) | UPDATE to restore, or re-INSERT |
+
+```typescript
+// Non-versioned DB — soft-delete (default):
+for (const obj of tracker.trackedObjects) {
+  switch (obj.nonVersionedState()) {
+    case ObjectState.New:       /* INSERT */ break;
+    case ObjectState.Edited:    /* UPDATE */ break;
+    case ObjectState.Deleted:   /* DELETE */ break;
+    case ObjectState.Unchanged: break;
+  }
+}
+
+// Non-versioned DB — hard-delete: pass true to treat DeleteReverted as New (re-INSERT)
+obj.nonVersionedState(true);
+```
+
+**Deleted state on collection removal:**
+
+When a `TrackedObject` is removed from a `TrackedCollection`, its `state` is automatically set to `Deleted`. Undoing the collection removal restores the previous state atomically — both changes land in the same undo step.
+
+```typescript
+const order = new OrderModel(tracker);
+order._committedState = ObjectState.Unchanged;
+order.pk = 5;
+const collection = new TrackedCollection<OrderModel>(tracker, [order]);
+
+collection.remove(order);
+order.state; // ObjectState.Deleted
+
+tracker.undo();
+order.state; // ObjectState.Unchanged — restored alongside collection
+```
 
 ---
 
@@ -440,16 +546,16 @@ tracker.beforeCommit();
 const serverIds = [{ placeholder: invoice.id, value: 42 }];
 
 // 3. Apply real IDs and mark clean:
-tracker.afterCommit(serverIds);
+tracker.onCommit(serverIds);
 // invoice.id is now 42
 // tracker.isDirty is false
 ```
 
 `beforeCommit()` only assigns a placeholder if the property's current value is `0` (the default). Models that already have a positive ID are left untouched.
 
-`afterCommit()` with no arguments (or an empty array) still marks the tracker as clean — it just skips the ID replacement step.
+`onCommit()` with no arguments (or an empty array) still marks the tracker as clean — it just skips the ID replacement step.
 
-The placeholder counter resets to `-1` after each `afterCommit()`, so the next commit cycle always starts fresh.
+The placeholder counter never resets — each `onCommit()` cycle continues from where it left off — so placeholder IDs are globally unique across the lifetime of the tracker and can never collide across save cycles.
 
 ---
 
@@ -557,7 +663,7 @@ const response = [
   { placeholder: -1, value: 100 },
   { placeholder: -2, value: 201 },
 ];
-tracker.afterCommit(response);
+tracker.onCommit(response);
 // invoice.id === 100, line1.id === 201
 // tracker.isDirty === false
 

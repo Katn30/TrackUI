@@ -5,7 +5,7 @@ import { OperationProperties } from "./OperationProperties";
 import { PropertyType } from "./PropertyType";
 import { CollectionUtilities } from "./CollectionUtilities";
 import {
-  ExternallyAssignment,
+  ExternalAssignment,
   getExternallyAssignedProperty,
 } from "./ExternallyAssigned";
 import { validate } from "./Registry";
@@ -185,7 +185,7 @@ export class Tracker {
       this.revalidate();
     }
   }
-  
+
   private isEndingCurrentOperation(properties: OperationProperties) {
     return this._currentOperationOwner === properties.trackedObject &&
       this._currentOperationPropertyName === properties.property;
@@ -234,30 +234,18 @@ export class Tracker {
     );
   }
 
-  public afterCommit(keys?: ExternallyAssignment[]) {
+  public onCommit(keys?: ExternalAssignment[]): void {
+    const lastOp = CollectionUtilities.getLast(this._undoOperations);
     if (keys) {
-      this.setIds(keys);
+      this.trackedObjects.forEach((obj) => obj.applyExternalKey(keys, lastOp));
     }
-    this._commitStateOperation = CollectionUtilities.getLast(
-      this._undoOperations,
-    );
-    this.trackedObjects.forEach((x) => x.onCommitted());
+    this.trackedObjects.forEach((obj) => obj.onCommitted(lastOp));
+    this._commitStateOperation = lastOp;
     this.reset();
-    this._externallyAssignedPlaceholderCounter = -1;
   }
 
-  private setIds(keys: ExternallyAssignment[]) {
-    this.trackedObjects.forEach((model) => {
-      const propertyName = getExternallyAssignedProperty(
-        Object.getPrototypeOf(model),
-      );
-      if (propertyName && (model as any)[propertyName] < 0) {
-        const response = keys.find(
-          (x) => x.placeholder === (model as any)[propertyName],
-        );
-        if (response) (model as any)[propertyName] = response.value;
-      }
-    });
+  public isInUndoStack(op: Operation): boolean {
+    return this._undoOperations.includes(op);
   }
 
   public beforeCommit() {

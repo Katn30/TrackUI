@@ -3,6 +3,8 @@ import { Tracker } from "./Tracker";
 import { OperationProperties } from "./OperationProperties";
 import { PropertyType } from "./PropertyType";
 import { TypedEvent } from "./TypedEvent";
+import { TrackedObject } from "./TrackedObject";
+import { ObjectState } from "./ObjectState";
 
 export class TrackedCollection<T> implements Array<T>, ITracked {
   private _collection: T[];
@@ -94,6 +96,7 @@ export class TrackedCollection<T> implements Array<T>, ITracked {
         } else {
           removed = this.doSplice(start, deleteCount, items);
         }
+        this.trackRemovedObjectDeletions(removed);
       },
       () => this.undoSplice(start, items, removed),
       new OperationProperties(this, undefined, PropertyType.Collection),
@@ -120,6 +123,20 @@ export class TrackedCollection<T> implements Array<T>, ITracked {
     this.changed.emit(event!);
 
     return reusedRemoved ?? removed!;
+  }
+
+  private trackRemovedObjectDeletions(removed: T[]): void {
+    for (const item of removed) {
+      if (item instanceof TrackedObject) {
+        const prevCommittedState = item._committedState;
+        const targetState = prevCommittedState === ObjectState.New ? ObjectState.Unchanged : ObjectState.Deleted;
+        this.tracker.doAndTrack(
+          () => { (item as TrackedObject)._committedState = targetState; },
+          () => { (item as TrackedObject)._committedState = prevCommittedState; },
+          new OperationProperties(item as TrackedObject, '__saveState__', PropertyType.Object),
+        );
+      }
+    }
   }
 
   private undoSplice(start: number, items: T[], removed: T[]): void {

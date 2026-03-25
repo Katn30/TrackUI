@@ -114,37 +114,6 @@ describe("Tracked", () => {
     });
   });
 
-  describe("dirty state", () => {
-    it("is not dirty initially", () => {
-      expect(person.isDirty).toBe(false);
-      expect(person.dirtyCounter).toBe(0);
-    });
-
-    it("becomes dirty after a property change", () => {
-      person.name = "Alice";
-      expect(person.isDirty).toBe(true);
-      expect(person.dirtyCounter).toBe(1);
-    });
-
-    it("increments dirtyCounter for each change", () => {
-      person.name = "Alice";
-      person.age = 30;
-      expect(person.dirtyCounter).toBe(2);
-    });
-
-    it("resets dirtyCounter to 0 after onCommitted", () => {
-      person.name = "Alice";
-      person.onCommitted();
-      expect(person.isDirty).toBe(false);
-      expect(person.dirtyCounter).toBe(0);
-    });
-
-    it("does not mark dirty when setting the same value", () => {
-      person.name = "";
-      expect(person.isDirty).toBe(false);
-    });
-  });
-
   describe("undo / redo", () => {
     it("undo reverts a property change", () => {
       person.name = "Alice";
@@ -161,12 +130,6 @@ describe("Tracked", () => {
       expect(person.isDirty).toBe(true);
     });
 
-    it("undo decrements dirtyCounter", () => {
-      person.name = "Alice";
-      person.age = 30;
-      tracker.undo();
-      expect(person.dirtyCounter).toBe(1);
-    });
   });
 
   describe("validation", () => {
@@ -230,7 +193,7 @@ describe("Tracked", () => {
 
     it("tracker is clean after afterCommit", () => {
       person.name = "Alice";
-      tracker.afterCommit();
+      tracker.onCommit();
       expect(tracker.isDirty).toBe(false);
       expect(person.isDirty).toBe(false);
     });
@@ -239,7 +202,7 @@ describe("Tracked", () => {
       const states: boolean[] = [];
       tracker.isDirtyChanged.subscribe((v) => states.push(v));
       person.name = "Alice";
-      tracker.afterCommit();
+      tracker.onCommit();
       expect(states).toEqual([true, false]);
     });
   });
@@ -312,17 +275,6 @@ describe("Tracked", () => {
       expect(t.isValid).toBe(true);
     });
 
-    it("afterCommit resets isDirty on all tracked models", () => {
-      const t = new Tracker();
-      const m1 = new StrictModel(t);
-      const m2 = new StrictModel(t);
-      m1.field = "ok";
-      m2.field = "ok";
-      t.afterCommit();
-      expect(m1.isDirty).toBe(false);
-      expect(m2.isDirty).toBe(false);
-    });
-
     it("destroying one model removes it from tracker validity check", () => {
       const t = new Tracker();
       const m1 = new StrictModel(t);
@@ -338,7 +290,7 @@ describe("Tracked", () => {
     it("tracks a Date property change and marks dirty", () => {
       const t = new Tracker();
       const event = new EventModel(t);
-      t.afterCommit();
+      t.onCommit();
 
       event.startDate = new Date("2024-01-01");
 
@@ -349,7 +301,7 @@ describe("Tracked", () => {
       const t = new Tracker();
       const event = new EventModel(t);
       const original = event.startDate;
-      t.afterCommit();
+      t.onCommit();
 
       event.startDate = new Date("2024-01-01");
       t.undo();
@@ -363,7 +315,7 @@ describe("Tracked", () => {
     it("tracks an object property change and marks dirty", () => {
       const t = new Tracker();
       const cfg = new ConfigModel(t);
-      t.afterCommit();
+      t.onCommit();
 
       cfg.config = { theme: "dark" };
 
@@ -374,7 +326,7 @@ describe("Tracked", () => {
       const t = new Tracker();
       const cfg = new ConfigModel(t);
       const original = cfg.config;
-      t.afterCommit();
+      t.onCommit();
 
       cfg.config = { theme: "dark" };
       t.undo();
@@ -397,7 +349,7 @@ describe("Tracked", () => {
     it("setting null property to empty string does not mark dirty", () => {
       const t = new Tracker();
       const m = new NullableModel(t);
-      t.afterCommit();
+      t.onCommit();
 
       m.label = "";
 

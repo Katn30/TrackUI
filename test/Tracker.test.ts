@@ -6,7 +6,7 @@ import { Tracked } from "../src/Tracked";
 import { TrackedCollection } from "../src/TrackedCollection";
 import {
   ExternallyAssigned,
-  ExternallyAssignment,
+  ExternalAssignment,
 } from "../src/ExternallyAssigned";
 
 // ---- Models ----
@@ -55,7 +55,7 @@ describe("Tracker – sequential changes create separate undo steps", () => {
   it("a property change and a collection mutation create two undo steps", () => {
     const tracker = new Tracker();
     const invoice = new InvoiceModel(tracker, "active", ["line-1"]);
-    tracker.afterCommit();
+    tracker.onCommit();
 
     invoice.status = "void";
     invoice.lines.clear();
@@ -72,7 +72,7 @@ describe("Tracker – sequential changes create separate undo steps", () => {
   it("two sequential collection mutations create two undo steps", () => {
     const tracker = new Tracker();
     const invoice = new InvoiceModel(tracker, "", ["a", "b"]);
-    tracker.afterCommit();
+    tracker.onCommit();
 
     invoice.lines.push("c");
     invoice.lines.push("d");
@@ -177,7 +177,7 @@ describe("Tracker – @TrackedProperty on get/set", () => {
   it("change is tracked and undoable", () => {
     const tracker = new Tracker();
     const person = new PersonModel(tracker, "Alice");
-    tracker.afterCommit();
+    tracker.onCommit();
 
     person.name = "Bob";
 
@@ -200,7 +200,7 @@ describe("Tracker – @TrackedProperty on get/set", () => {
   it("setting the same value does not create an undo step", () => {
     const tracker = new Tracker();
     const person = new PersonModel(tracker, "Alice");
-    tracker.afterCommit();
+    tracker.onCommit();
 
     person.name = "Alice";
 
@@ -281,8 +281,8 @@ describe("Tracker – @ExternallyAssigned / beforeCommit / afterCommit", () => {
       tracker.beforeCommit();
       const placeholder = product.id;
 
-      const keys: ExternallyAssignment[] = [{ placeholder, value: 101 }];
-      tracker.afterCommit(keys);
+      const keys: ExternalAssignment[] = [{ placeholder, value: 101 }];
+      tracker.onCommit(keys);
 
       expect(product.id).toBe(101);
     });
@@ -296,7 +296,7 @@ describe("Tracker – @ExternallyAssigned / beforeCommit / afterCommit", () => {
       const ph1 = p1.id;
       const ph2 = p2.id;
 
-      tracker.afterCommit([
+      tracker.onCommit([
         { placeholder: ph1, value: 10 },
         { placeholder: ph2, value: 20 },
       ]);
@@ -312,7 +312,7 @@ describe("Tracker – @ExternallyAssigned / beforeCommit / afterCommit", () => {
         product.id = 42;
       });
 
-      tracker.afterCommit();
+      tracker.onCommit();
 
       expect(product.id).toBe(42);
     });
@@ -323,7 +323,7 @@ describe("Tracker – @ExternallyAssigned / beforeCommit / afterCommit", () => {
       product.name = "Widget";
 
       tracker.beforeCommit();
-      tracker.afterCommit([]);
+      tracker.onCommit([]);
 
       expect(tracker.isDirty).toBe(false);
     });
@@ -335,21 +335,23 @@ describe("Tracker – @ExternallyAssigned / beforeCommit / afterCommit", () => {
       tracker.beforeCommit();
       const placeholder = product.id;
 
-      tracker.afterCommit([{ placeholder: -999, value: 101 }]);
+      tracker.onCommit([{ placeholder: -999, value: 101 }]);
 
       expect(product.id).toBe(placeholder);
     });
 
-    it("placeholder counter resets after afterCommit so IDs restart from -1", () => {
+    it("placeholder IDs are unique across save cycles", () => {
       const tracker = new Tracker();
       const p1 = new ProductModel(tracker);
       tracker.beforeCommit();
-      tracker.afterCommit([{ placeholder: p1.id, value: 1 }]);
+      const ph1 = p1.id;
+      tracker.onCommit([{ placeholder: ph1, value: 1 }]);
 
       const p2 = new ProductModel(tracker);
       tracker.beforeCommit();
 
-      expect(p2.id).toBe(-1);
+      expect(p2.id).toBeLessThan(0);
+      expect(p2.id).not.toBe(ph1);
     });
   });
 });
@@ -423,7 +425,7 @@ describe("Tracker – isValidChanged", () => {
   it("fires with false when the tracker becomes invalid", () => {
     const tracker = new Tracker();
     const model = new ValidatedModel(tracker);
-    tracker.afterCommit();
+    tracker.onCommit();
     const calls: boolean[] = [];
     tracker.isValidChanged.subscribe((v) => calls.push(v));
 
