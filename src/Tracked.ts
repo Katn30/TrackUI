@@ -1,10 +1,10 @@
-import { TrackedObject } from "./TrackedObject";
+import { TrackedObjectBase } from "./TrackedObjectBase";
 import { OperationProperties } from "./OperationProperties";
 import { PropertyType } from "./PropertyType";
 import { ITracked } from "./ITracked";
 import { registerPropertyValidator } from "./Registry";
 
-export function Tracked<T extends TrackedObject, V>(
+export function Tracked<T extends TrackedObjectBase, V>(
   validator?: (self: T, newValue: V) => string | undefined,
 ) {
   function decorator(

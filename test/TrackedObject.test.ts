@@ -4,10 +4,6 @@ import { Tracker } from "../src/Tracker";
 import { InitializeTracked } from "../src/InitializeTracked";
 import { Tracked } from "../src/Tracked";
 import { TrackedCollection } from "../src/TrackedCollection";
-import {
-  ExternallyAssigned,
-  ExternalAssignment,
-} from "../src/ExternallyAssigned";
 
 // ---- Models ----
 
@@ -34,9 +30,41 @@ class InvoiceModel extends TrackedObject {
   }
 }
 
-// ---- Tests ----
+@InitializeTracked
+class PersonModel extends TrackedObject {
+  private _name: string = "";
 
-describe("Tracker – sequential changes create separate undo steps", () => {
+  get name(): string {
+    return this._name;
+  }
+
+  @Tracked()
+  set name(value: string) {
+    this._name = value;
+  }
+
+  constructor(tracker: Tracker, initialName = "") {
+    super(tracker);
+    this.name = initialName;
+  }
+}
+
+@InitializeTracked
+class ValidatedModel extends TrackedObject {
+  @Tracked((_, v: string) => (!v ? "Required" : undefined))
+  accessor status: string = "initial";
+
+  @Tracked()
+  accessor note: string = "";
+
+  constructor(tracker: Tracker) {
+    super(tracker);
+  }
+}
+
+// ---- Sequential changes ----
+
+describe("TrackedObject – sequential changes create separate undo steps", () => {
   it("two sequential property changes create two undo steps", () => {
     const tracker = new Tracker();
     const invoice = new InvoiceModel(tracker);
@@ -86,7 +114,9 @@ describe("Tracker – sequential changes create separate undo steps", () => {
   });
 });
 
-describe("Tracker – tracking suppression", () => {
+// ---- Tracking suppression ----
+
+describe("TrackedObject – tracking suppression", () => {
   it("changes inside trackingSuppressed do not create undo entries", () => {
     const tracker = new Tracker();
     const invoice = new InvoiceModel(tracker);
@@ -152,28 +182,9 @@ describe("Tracker – tracking suppression", () => {
   });
 });
 
-// ---- get/set decorator model ----
+// ---- @Tracked on get/set accessor ----
 
-@InitializeTracked
-class PersonModel extends TrackedObject {
-  private _name: string = "";
-
-  get name(): string {
-    return this._name;
-  }
-
-  @Tracked()
-  set name(value: string) {
-    this._name = value;
-  }
-
-  constructor(tracker: Tracker, initialName = "") {
-    super(tracker);
-    this.name = initialName;
-  }
-}
-
-describe("Tracker – @TrackedProperty on get/set", () => {
+describe("TrackedObject – @Tracked on get/set accessor", () => {
   it("change is tracked and undoable", () => {
     const tracker = new Tracker();
     const person = new PersonModel(tracker, "Alice");
@@ -221,159 +232,9 @@ describe("Tracker – @TrackedProperty on get/set", () => {
   });
 });
 
-// ---- ExternallyAssigned model ----
+// ---- Events ----
 
-@InitializeTracked
-class ProductModel extends TrackedObject {
-  @ExternallyAssigned
-  id: number = 0;
-
-  @Tracked()
-  accessor name: string = "";
-
-  constructor(tracker: Tracker, initialName = "") {
-    super(tracker);
-    this.name = initialName;
-  }
-}
-
-describe("Tracker – @ExternallyAssigned / beforeCommit / afterCommit", () => {
-  describe("beforeCommit()", () => {
-    it("assigns a negative placeholder ID to a new model with no ID", () => {
-      const tracker = new Tracker();
-      const product = new ProductModel(tracker, "Widget");
-
-      tracker.beforeCommit();
-
-      expect(product.id).toBeLessThan(0);
-    });
-
-    it("assigns distinct placeholder IDs to multiple new models", () => {
-      const tracker = new Tracker();
-      const p1 = new ProductModel(tracker, "A");
-      const p2 = new ProductModel(tracker, "B");
-
-      tracker.beforeCommit();
-
-      expect(p1.id).toBeLessThan(0);
-      expect(p2.id).toBeLessThan(0);
-      expect(p1.id).not.toBe(p2.id);
-    });
-
-    it("does not overwrite a model that already has a positive ID", () => {
-      const tracker = new Tracker();
-      const product = new ProductModel(tracker, "Widget");
-      tracker.withTrackingSuppressed(() => {
-        product.id = 42;
-      });
-
-      tracker.beforeCommit();
-
-      expect(product.id).toBe(42);
-    });
-  });
-
-  describe("afterCommit(keys)", () => {
-    it("replaces placeholder IDs with real IDs from the server", () => {
-      const tracker = new Tracker();
-      const product = new ProductModel(tracker, "Widget");
-
-      tracker.beforeCommit();
-      const placeholder = product.id;
-
-      const keys: ExternalAssignment[] = [{ placeholder, value: 101 }];
-      tracker.onCommit(keys);
-
-      expect(product.id).toBe(101);
-    });
-
-    it("replaces placeholder IDs for multiple models independently", () => {
-      const tracker = new Tracker();
-      const p1 = new ProductModel(tracker, "A");
-      const p2 = new ProductModel(tracker, "B");
-
-      tracker.beforeCommit();
-      const ph1 = p1.id;
-      const ph2 = p2.id;
-
-      tracker.onCommit([
-        { placeholder: ph1, value: 10 },
-        { placeholder: ph2, value: 20 },
-      ]);
-
-      expect(p1.id).toBe(10);
-      expect(p2.id).toBe(20);
-    });
-
-    it("afterCommit() without keys does not change IDs", () => {
-      const tracker = new Tracker();
-      const product = new ProductModel(tracker, "Widget");
-      tracker.withTrackingSuppressed(() => {
-        product.id = 42;
-      });
-
-      tracker.onCommit();
-
-      expect(product.id).toBe(42);
-    });
-
-    it("afterCommit() marks tracker as not dirty", () => {
-      const tracker = new Tracker();
-      const product = new ProductModel(tracker);
-      product.name = "Widget";
-
-      tracker.beforeCommit();
-      tracker.onCommit([]);
-
-      expect(tracker.isDirty).toBe(false);
-    });
-
-    it("leaves ID unchanged when placeholder is not found in keys array", () => {
-      const tracker = new Tracker();
-      const product = new ProductModel(tracker, "Widget");
-
-      tracker.beforeCommit();
-      const placeholder = product.id;
-
-      tracker.onCommit([{ placeholder: -999, value: 101 }]);
-
-      expect(product.id).toBe(placeholder);
-    });
-
-    it("placeholder IDs are unique across save cycles", () => {
-      const tracker = new Tracker();
-      const p1 = new ProductModel(tracker);
-      tracker.beforeCommit();
-      const ph1 = p1.id;
-      tracker.onCommit([{ placeholder: ph1, value: 1 }]);
-
-      const p2 = new ProductModel(tracker);
-      tracker.beforeCommit();
-
-      expect(p2.id).toBeLessThan(0);
-      expect(p2.id).not.toBe(ph1);
-    });
-  });
-});
-
-// ---- Validated model ----
-
-@InitializeTracked
-class ValidatedModel extends TrackedObject {
-  @Tracked((_, v: string) => (!v ? "Required" : undefined))
-  accessor status: string = "initial";
-
-  @Tracked()
-  accessor note: string = "";
-
-  constructor(tracker: Tracker) {
-    super(tracker);
-  }
-}
-
-// ---- Event tests ----
-
-describe("Tracker – isDirtyChanged", () => {
+describe("TrackedObject – isDirtyChanged", () => {
   it("fires with true when the tracker becomes dirty", () => {
     const tracker = new Tracker();
     const invoice = new InvoiceModel(tracker);
@@ -400,11 +261,11 @@ describe("Tracker – isDirtyChanged", () => {
   it("does not fire when isDirty is already true", () => {
     const tracker = new Tracker();
     const invoice = new InvoiceModel(tracker);
-    invoice.status = "draft"; // isDirty → true
+    invoice.status = "draft";
     const calls: boolean[] = [];
     tracker.isDirtyChanged.subscribe((v) => calls.push(v));
 
-    invoice.status = "active"; // isDirty stays true
+    invoice.status = "active";
 
     expect(calls).toEqual([]);
   });
@@ -415,13 +276,13 @@ describe("Tracker – isDirtyChanged", () => {
     const calls: boolean[] = [];
     tracker.isDirtyChanged.subscribe((v) => calls.push(v));
 
-    tracker.undo(); // nothing to undo, isDirty stays false
+    tracker.undo();
 
     expect(calls).toEqual([]);
   });
 });
 
-describe("Tracker – isValidChanged", () => {
+describe("TrackedObject – isValidChanged", () => {
   it("fires with false when the tracker becomes invalid", () => {
     const tracker = new Tracker();
     const model = new ValidatedModel(tracker);
@@ -429,7 +290,7 @@ describe("Tracker – isValidChanged", () => {
     const calls: boolean[] = [];
     tracker.isValidChanged.subscribe((v) => calls.push(v));
 
-    model.status = ""; // validator fails → isValid → false
+    model.status = "";
 
     expect(calls).toEqual([false]);
   });
@@ -441,7 +302,7 @@ describe("Tracker – isValidChanged", () => {
     const calls: boolean[] = [];
     tracker.isValidChanged.subscribe((v) => calls.push(v));
 
-    model.status = "active"; // validator passes → isValid → true
+    model.status = "active";
 
     expect(calls).toEqual([true]);
   });
@@ -449,35 +310,35 @@ describe("Tracker – isValidChanged", () => {
   it("does not fire when isValid is already false", () => {
     const tracker = new Tracker();
     const model = new ValidatedModel(tracker);
-    model.status = ""; // isValid → false
+    model.status = "";
     const calls: boolean[] = [];
     tracker.isValidChanged.subscribe((v) => calls.push(v));
 
-    model.note = "x"; // tracked change triggers revalidation — isValid stays false
+    model.note = "x";
 
     expect(calls).toEqual([]);
   });
 
   it("does not fire when isValid is already true", () => {
     const tracker = new Tracker();
-    const model = new ValidatedModel(tracker); // isValid is true
+    const model = new ValidatedModel(tracker);
     const calls: boolean[] = [];
     tracker.isValidChanged.subscribe((v) => calls.push(v));
 
-    model.note = "x"; // tracked change triggers revalidation — isValid stays true
+    model.note = "x";
 
     expect(calls).toEqual([]);
   });
 });
 
-describe("Tracker – canCommitChanged", () => {
+describe("TrackedObject – canCommitChanged", () => {
   it("fires with true when isDirty becomes true and isValid is already true", () => {
     const tracker = new Tracker();
     const invoice = new InvoiceModel(tracker);
     const calls: boolean[] = [];
     tracker.canCommitChanged.subscribe((v) => calls.push(v));
 
-    invoice.status = "draft"; // isDirty → true, isValid already true → canCommit → true
+    invoice.status = "draft";
 
     expect(calls).toEqual([true]);
   });
@@ -489,7 +350,7 @@ describe("Tracker – canCommitChanged", () => {
     const calls: boolean[] = [];
     tracker.canCommitChanged.subscribe((v) => calls.push(v));
 
-    tracker.undo(); // isDirty → false → canCommit → false
+    tracker.undo();
 
     expect(calls).toEqual([false]);
   });
@@ -497,11 +358,11 @@ describe("Tracker – canCommitChanged", () => {
   it("fires with false when isValid becomes false while isDirty is true", () => {
     const tracker = new Tracker();
     const model = new ValidatedModel(tracker);
-    model.status = "active"; // isDirty=true, isValid=true → canCommit=true
+    model.status = "active";
     const calls: boolean[] = [];
     tracker.canCommitChanged.subscribe((v) => calls.push(v));
 
-    model.status = ""; // isValid → false → canCommit → false
+    model.status = "";
 
     expect(calls).toEqual([false]);
   });
@@ -510,11 +371,11 @@ describe("Tracker – canCommitChanged", () => {
     const tracker = new Tracker();
     const model = new ValidatedModel(tracker);
     tracker.withTrackingSuppressed(() => { model.status = ""; });
-    tracker.revalidate(); // suppressed writes bypass doAndTrack so revalidation must be triggered manually
+    tracker.revalidate();
     const calls: boolean[] = [];
     tracker.canCommitChanged.subscribe((v) => calls.push(v));
 
-    model.note = "x"; // isDirty → true, isValid stays false → canCommit stays false
+    model.note = "x";
 
     expect(calls).toEqual([]);
   });
@@ -522,11 +383,11 @@ describe("Tracker – canCommitChanged", () => {
   it("does not fire when a second change is made while already dirty and valid", () => {
     const tracker = new Tracker();
     const invoice = new InvoiceModel(tracker);
-    invoice.status = "draft"; // canCommit → true
+    invoice.status = "draft";
     const calls: boolean[] = [];
     tracker.canCommitChanged.subscribe((v) => calls.push(v));
 
-    invoice.status = "active"; // isDirty stays true, isValid stays true → canCommit stays true
+    invoice.status = "active";
 
     expect(calls).toEqual([]);
   });

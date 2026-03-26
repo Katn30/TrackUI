@@ -1,9 +1,6 @@
 export enum ObjectState {
-  New,
-  Unchanged,
-  Edited,
-  Deleted,
-  InsertReverted,
-  EditReverted,
-  DeleteReverted,
+  New = 'New',
+  Unchanged = 'Unchanged',
+  Edited = 'Edited',
+  Deleted = 'Deleted',
 }

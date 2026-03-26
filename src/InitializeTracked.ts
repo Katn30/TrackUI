@@ -1,4 +1,4 @@
-import { validateDecorated } from "./TrackedObject";
+import { validateDecorated } from "./TrackedObjectBase";
 import { Tracker } from "./Tracker";
 
 

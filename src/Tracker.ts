@@ -10,7 +10,7 @@ import {
 } from "./ExternallyAssigned";
 import { validate } from "./Registry";
 import { ITracked } from "./ITracked";
-import { TrackedObject } from "./TrackedObject";
+import { TrackedObjectBase } from "./TrackedObjectBase";
 
 export class Tracker {
   private _currentOperation: Operation | undefined;
@@ -29,7 +29,7 @@ export class Tracker {
 
   public readonly coalescingWindowMs: number | undefined;
 
-  public readonly trackedObjects: TrackedObject[] = [];
+  public readonly trackedObjects: TrackedObjectBase[] = [];
 
   public readonly trackedCollections: TrackedCollection<any>[] = [];
 
@@ -109,12 +109,12 @@ export class Tracker {
     this._canCommit = false;
   }
 
-  public trackObject(trackedObject: TrackedObject) {
+  public trackObject(trackedObject: TrackedObjectBase) {
     this.trackedObjects.push(trackedObject);
     this.isValid = this.isValid && trackedObject.isValid;
   }
 
-  public untrackObject(trackedObject: TrackedObject) {
+  public untrackObject(trackedObject: TrackedObjectBase) {
     this.trackedObjects.splice(this.trackedObjects.indexOf(trackedObject), 1);
     this.revalidate();
   }
@@ -237,7 +237,7 @@ export class Tracker {
   public onCommit(keys?: ExternalAssignment[]): void {
     const lastOp = CollectionUtilities.getLast(this._undoOperations);
     if (keys) {
-      this.trackedObjects.forEach((obj) => obj.applyExternalKey(keys, lastOp));
+      this.trackedObjects.forEach((obj) => obj.applyExternalAssignments(keys, lastOp));
     }
     this.trackedObjects.forEach((obj) => obj.onCommitted(lastOp));
     this._commitStateOperation = lastOp;
@@ -253,7 +253,7 @@ export class Tracker {
       const propertyName = getExternallyAssignedProperty(
         Object.getPrototypeOf(model),
       );
-      if (propertyName && !(model as any)[propertyName]) {
+      if (propertyName && (model as any)[propertyName] <= 0) {
         (model as any)[propertyName] = this._externallyAssignedPlaceholderCounter--;
       }
     });

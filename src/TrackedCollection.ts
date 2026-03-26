@@ -3,8 +3,7 @@ import { Tracker } from "./Tracker";
 import { OperationProperties } from "./OperationProperties";
 import { PropertyType } from "./PropertyType";
 import { TypedEvent } from "./TypedEvent";
-import { TrackedObject } from "./TrackedObject";
-import { ObjectState } from "./ObjectState";
+import { TrackedObjectBase } from "./TrackedObjectBase";
 
 export class TrackedCollection<T> implements Array<T>, ITracked {
   private _collection: T[];
@@ -127,14 +126,8 @@ export class TrackedCollection<T> implements Array<T>, ITracked {
 
   private trackRemovedObjectDeletions(removed: T[]): void {
     for (const item of removed) {
-      if (item instanceof TrackedObject) {
-        const prevCommittedState = item._committedState;
-        const targetState = prevCommittedState === ObjectState.New ? ObjectState.Unchanged : ObjectState.Deleted;
-        this.tracker.doAndTrack(
-          () => { (item as TrackedObject)._committedState = targetState; },
-          () => { (item as TrackedObject)._committedState = prevCommittedState; },
-          new OperationProperties(item as TrackedObject, '__saveState__', PropertyType.Object),
-        );
+      if (item instanceof TrackedObjectBase) {
+        item.markDeletion();
       }
     }
   }
