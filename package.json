@@ -1,6 +1,6 @@
 {
   "name": "trackui",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Operation tracking, undo/redo, model validation, and dirty state management for TypeScript",
   "type": "module",
   "main": "./dist/index.cjs",

@@ -17,8 +17,8 @@ class OrderModel extends VersionedTrackedObject {
   @Tracked()
   accessor amount: number = 0;
 
-  constructor(tracker: Tracker, description = "", amount = 0) {
-    super(tracker);
+  constructor(tracker: Tracker, description = "", amount = 0, initialState = VersionedObjectState.Unchanged) {
+    super(tracker, initialState);
     this.description = description;
     this.amount = amount;
   }
@@ -32,8 +32,8 @@ class ProductModel extends VersionedTrackedObject {
   @Tracked()
   accessor name: string = "";
 
-  constructor(tracker: Tracker, initialName = "") {
-    super(tracker);
+  constructor(tracker: Tracker, initialName = "", initialState = VersionedObjectState.Unchanged) {
+    super(tracker, initialState);
     this.name = initialName;
   }
 }
@@ -41,13 +41,7 @@ class ProductModel extends VersionedTrackedObject {
 // ---- Helper ----
 
 function makeUnchangedOrder(tracker: Tracker, description = "Widget"): OrderModel {
-  let obj!: OrderModel;
-  tracker.withTrackingSuppressed(() => {
-    obj = new OrderModel(tracker);
-    obj._committedState = VersionedObjectState.Unchanged;
-    (obj as any).description = description;
-  });
-  return obj;
+  return new OrderModel(tracker, description);
 }
 
 // ---- dirtyCounter ----
@@ -116,21 +110,33 @@ describe("VersionedTrackedObject – dirty state (isDirty / dirtyCounter)", () =
 // ---- Initial states ----
 
 describe("VersionedTrackedObject – initial states", () => {
-  it("new object has state New", () => {
+  it("new object has state Unchanged by default", () => {
     const tracker = new Tracker();
     const order = new OrderModel(tracker);
+    expect(order.state).toBe(VersionedObjectState.Unchanged);
+  });
+
+  it("pushing an Unchanged object into a collection sets its state to New", () => {
+    const tracker = new Tracker();
+    const order = new OrderModel(tracker);
+    const collection = new TrackedCollection<OrderModel>(tracker, []);
+    collection.push(order);
     expect(order.state).toBe(VersionedObjectState.New);
   });
 
-  it("object with _committedState set to Unchanged has state Unchanged when clean", () => {
+  it("undo of push restores state to Unchanged", () => {
     const tracker = new Tracker();
-    const order = makeUnchangedOrder(tracker);
+    const order = new OrderModel(tracker);
+    const collection = new TrackedCollection<OrderModel>(tracker, []);
+    collection.push(order);
+    tracker.undo();
     expect(order.state).toBe(VersionedObjectState.Unchanged);
+    expect(collection.length).toBe(0);
   });
 
   it("New object with property changes still has state New, not Edited", () => {
     const tracker = new Tracker();
-    const order = new OrderModel(tracker);
+    const order = new OrderModel(tracker, "", 0, VersionedObjectState.New);
     order.description = "changed";
     expect(order.state).toBe(VersionedObjectState.New);
   });
@@ -177,7 +183,7 @@ describe("VersionedTrackedObject – Edited derived state", () => {
 describe("VersionedTrackedObject – onCommit() on New object (insert)", () => {
   it("sets state to Unchanged", () => {
     const tracker = new Tracker();
-    const order = new OrderModel(tracker);
+    const order = new OrderModel(tracker, "", 0, VersionedObjectState.New);
     order.description = "new order";
     tracker.onCommit();
     expect(order.state).toBe(VersionedObjectState.Unchanged);
@@ -185,7 +191,7 @@ describe("VersionedTrackedObject – onCommit() on New object (insert)", () => {
 
   it("undo sets state to InsertReverted", () => {
     const tracker = new Tracker();
-    const order = new OrderModel(tracker);
+    const order = new OrderModel(tracker, "", 0, VersionedObjectState.New);
     order.description = "new order";
     tracker.onCommit();
 
@@ -196,7 +202,7 @@ describe("VersionedTrackedObject – onCommit() on New object (insert)", () => {
 
   it("redo after undo sets state back to Unchanged", () => {
     const tracker = new Tracker();
-    const order = new OrderModel(tracker);
+    const order = new OrderModel(tracker, "", 0, VersionedObjectState.New);
     order.description = "new order";
     tracker.onCommit();
     tracker.undo();
@@ -207,8 +213,8 @@ describe("VersionedTrackedObject – onCommit() on New object (insert)", () => {
   });
 
   it("onCommit does not add a spurious extra undo step", () => {
-    const tracker = new Tracker();
-    const order = new OrderModel(tracker);
+    const tracker = new Tracker(undefined);
+    const order = new OrderModel(tracker, "", 0, VersionedObjectState.New);
     order.description = "new order";
     tracker.onCommit();
 
@@ -294,7 +300,7 @@ describe("VersionedTrackedObject – onCommit() on Deleted object", () => {
 describe("VersionedTrackedObject – onCommit() on *Reverted states", () => {
   it("InsertReverted → onCommit() → Unchanged", () => {
     const tracker = new Tracker();
-    const order = new OrderModel(tracker);
+    const order = new OrderModel(tracker, "", 0, VersionedObjectState.New);
     order.description = "new order";
     tracker.onCommit();
     tracker.undo();
@@ -401,24 +407,25 @@ describe("VersionedTrackedObject – Deleted on collection removal", () => {
   });
 
   it("removing a New object sets its state to Unchanged (never persisted)", () => {
-    const tracker = new Tracker();
+    const tracker = new Tracker(undefined);
     const order = new OrderModel(tracker);
-    const collection = new TrackedCollection<OrderModel>(tracker, [order]);
-
-    collection.remove(order);
-
+    const collection = new TrackedCollection<OrderModel>(tracker, []);
+    collection.push(order); // Unchanged → New
+    collection.remove(order); // New → Unchanged
     expect(order.state).toBe(VersionedObjectState.Unchanged);
   });
 
   it("undo of removing a New object restores state to New", () => {
-    const tracker = new Tracker();
+    const tracker = new Tracker(undefined);
     const order = new OrderModel(tracker);
-    const collection = new TrackedCollection<OrderModel>(tracker, [order]);
-    collection.remove(order);
+    const collection = new TrackedCollection<OrderModel>(tracker, []);
+    collection.push(order); // Unchanged → New
+    collection.remove(order); // New → Unchanged
 
-    tracker.undo();
+    tracker.undo(); // restore remove
 
     expect(order.state).toBe(VersionedObjectState.New);
+    expect(collection.length).toBe(1);
   });
 
   it("removing an Edited object sets its state to Deleted", () => {
@@ -459,7 +466,7 @@ describe("VersionedTrackedObject – Deleted on collection removal", () => {
 describe("VersionedTrackedObject – full save/undo/redo cycle", () => {
   it("maintains correct state through insert → edit → edit → delete → undo×4 (saving) → redo×4 (saving)", () => {
     const tracker = new Tracker(undefined);
-    const order = new OrderModel(tracker);
+    const order = new OrderModel(tracker, "", 0, VersionedObjectState.New);
     const collection = new TrackedCollection<OrderModel>(tracker, [order]);
 
     order.description = "v1";

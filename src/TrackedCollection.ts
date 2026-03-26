@@ -96,6 +96,7 @@ export class TrackedCollection<T> implements Array<T>, ITracked {
           removed = this.doSplice(start, deleteCount, items);
         }
         this.trackRemovedObjectDeletions(removed);
+        this.trackAddedObjectInsertions(items);
       },
       () => this.undoSplice(start, items, removed),
       new OperationProperties(this, undefined, PropertyType.Collection),
@@ -128,6 +129,14 @@ export class TrackedCollection<T> implements Array<T>, ITracked {
     for (const item of removed) {
       if (item instanceof TrackedObjectBase) {
         item.markDeletion();
+      }
+    }
+  }
+
+  private trackAddedObjectInsertions(added: T[]): void {
+    for (const item of added) {
+      if (item instanceof TrackedObjectBase) {
+        item.markAsNew();
       }
     }
   }

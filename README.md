@@ -126,6 +126,34 @@ accessor version: number = 0; // every increment is its own undo step
 
 `@InitializeTracked` wraps the constructor so that all property writes during construction are silently applied without creating undo entries. The tracker is clean and `canUndo` is `false` immediately after `new Model(tracker)`.
 
+### Default state: Unchanged
+
+Both `TrackedObject` and `VersionedTrackedObject` default to `Unchanged` at construction time. This matches the most common scenario — objects are loaded from the database and are already persisted.
+
+```typescript
+const item = new ItemModel(tracker); // state: Unchanged (DB-loaded default)
+```
+
+To create a **new** item that needs to be inserted, add it to a `TrackedCollection` via `push`. The collection is responsible for transitioning the object to `New`:
+
+```typescript
+const item = new ItemModel(tracker);
+items.push(item);          // state: New  — tracked, undoable
+tracker.undo();            // state: Unchanged, removed from collection
+```
+
+Items passed to the `TrackedCollection` **constructor** are treated as already-persisted rows and are **not** marked as `New`:
+
+```typescript
+const items = new TrackedCollection<ItemModel>(tracker, [dbItem]); // dbItem stays Unchanged
+```
+
+When you need a `New` object outside of a collection, pass the initial state explicitly:
+
+```typescript
+const item = new ItemModel(tracker, ItemState.New);
+```
+
 ### Bulk construction
 
 After each constructor, `@InitializeTracked` calls `tracker.revalidate()` to roll up validation state. For a single object this is fine, but constructing many objects in a loop means one full revalidation pass per object — O(n²) total.
@@ -241,7 +269,7 @@ The `@InitializeTracked` decorator:
 | `isValid` | `boolean` | `true` when all `@Tracked()` validators pass |
 | `validationMessages` | `Map<string, string>` | Maps property name → error message for each failing validator |
 | `state` | `ObjectState` | Computed DB operation required at save time |
-| `_committedState` | `ObjectState` | The persisted state (write with `withTrackingSuppressed` when loading from DB) |
+| `_committedState` | `ObjectState` | The persisted state. Defaults to `Unchanged`. Pass `initialState` to the constructor to override |
 | `destroy()` | `void` | Removes this model from the tracker |
 | `onCommitted()` | `void` | Called automatically by `tracker.onCommit()` — resets `dirtyCounter` to `0` |
 
@@ -264,14 +292,21 @@ import { ObjectState } from 'trackui';
 
 `Edited` is **derived**: when `_committedState === Unchanged` and the object has unsaved property changes (`isDirty === true`), `state` returns `Edited`. It is never stored directly.
 
-**Loading from DB — marking an object as Unchanged:**
+**Loading from DB:**
+
+Objects default to `Unchanged`, so no extra setup is needed. Property values set inside the constructor are suppressed by `@InitializeTracked`:
 
 ```typescript
-tracker.withTrackingSuppressed(() => {
-  const invoice = new InvoiceModel(tracker);
-  invoice._committedState = ObjectState.Unchanged;
-  invoice.status = 'active'; // direct write, not tracked
-});
+@InitializeTracked
+class InvoiceModel extends TrackedObject {
+  @Tracked() accessor status: string = '';
+  constructor(tracker: Tracker, data?: { status: string }) {
+    super(tracker); // initialState defaults to Unchanged
+    if (data) this.status = data.status; // suppressed — not tracked
+  }
+}
+
+const invoice = new InvoiceModel(tracker, { status: 'active' }); // state: Unchanged
 ```
 
 **Saving:**
@@ -355,13 +390,30 @@ The three `*Reverted` states arise when the user undoes a `tracker.onCommit()` c
 
 **Loading from DB:**
 
+Objects default to `Unchanged`. Set properties inside the constructor (suppressed by `@InitializeTracked`):
+
 ```typescript
-tracker.withTrackingSuppressed(() => {
-  const order = new OrderModel(tracker);
-  order._committedState = VersionedObjectState.Unchanged;
-  order.id = 42;
-  order.description = 'Widget';
-});
+@InitializeTracked
+class OrderModel extends VersionedTrackedObject {
+  @ExternallyAssigned id: number = 0;
+  @Tracked() accessor description: string = '';
+  constructor(tracker: Tracker, data?: { id: number; description: string }) {
+    super(tracker); // initialState defaults to Unchanged
+    if (data) {
+      this.id = data.id;
+      this.description = data.description;
+    }
+  }
+}
+
+const order = new OrderModel(tracker, { id: 42, description: 'Widget' }); // state: Unchanged
+```
+
+**Creating a new item:**
+
+```typescript
+const item = new OrderModel(tracker);  // state: Unchanged
+collection.push(item);                 // state: New — collection sets it
 ```
 
 ---

@@ -15,15 +15,15 @@ class ItemModel extends VersionedTrackedObject {
   @Tracked()
   accessor name: string = "";
 
-  constructor(tracker: Tracker) {
-    super(tracker);
+  constructor(tracker: Tracker, initialState = VersionedObjectState.Unchanged) {
+    super(tracker, initialState);
   }
 }
 
 describe("VersionedTrackedObject — insert lifecycle with @ExternallyAssigned", () => {
   it("insert → save → edit → edit → save → edit → undo×4 → re-save → redo → undo → redo → save", () => {
     const tracker = new Tracker(undefined); // coalescing disabled: each change = its own op
-    const item = new ItemModel(tracker);
+    const item = new ItemModel(tracker, VersionedObjectState.New);
 
     // 1. Create
     expect(item.state).toBe(VersionedObjectState.New);
@@ -110,7 +110,7 @@ describe("VersionedTrackedObject — insert lifecycle with @ExternallyAssigned",
 
   it("removing an InsertReverted object from a collection resets id and treats it as never-existed", () => {
     const tracker = new Tracker(undefined);
-    const item = new ItemModel(tracker);
+    const item = new ItemModel(tracker, VersionedObjectState.New);
     const collection = new TrackedCollection<ItemModel>(tracker, [item]);
 
     // Save (insert)

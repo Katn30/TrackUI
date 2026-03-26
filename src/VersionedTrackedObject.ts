@@ -7,7 +7,7 @@ import { PropertyType } from "./PropertyType";
 import { ExternalAssignment, getExternallyAssignedProperty } from "./ExternallyAssigned";
 
 export abstract class VersionedTrackedObject extends TrackedObjectBase {
-  public _committedState: VersionedObjectState = VersionedObjectState.New;
+  public _committedState: VersionedObjectState = VersionedObjectState.Unchanged;
   public readonly pendingHardDeletes = new Set<number>();
 
   public get state(): VersionedObjectState {
@@ -17,8 +17,9 @@ export abstract class VersionedTrackedObject extends TrackedObjectBase {
     return this._committedState;
   }
 
-  public constructor(tracker: Tracker) {
+  public constructor(tracker: Tracker, initialState: VersionedObjectState = VersionedObjectState.Unchanged) {
     super(tracker);
+    this._committedState = initialState;
   }
 
   public onCommitted(lastOp?: Operation): void {
@@ -51,6 +52,17 @@ export abstract class VersionedTrackedObject extends TrackedObjectBase {
       lastOp.add(redoFn, undoFn, new OperationProperties(this, '__pendingHardDeletes__', PropertyType.Object));
     }
     redoFn();
+  }
+
+  public markAsNew(): void {
+    if (this._committedState !== VersionedObjectState.Unchanged) return;
+    if (this.tracker.isTrackingSuppressed) return;
+    const prev = this._committedState;
+    this.tracker.doAndTrack(
+      () => { this._committedState = VersionedObjectState.New; },
+      () => { this._committedState = prev; },
+      new OperationProperties(this, '__saveState__', PropertyType.Object),
+    );
   }
 
   public markDeletion(): void {

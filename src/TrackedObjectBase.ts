@@ -43,6 +43,7 @@ export abstract class TrackedObjectBase implements ITracked {
 
   public abstract onCommitted(lastOp?: Operation): void;
   public abstract markDeletion(): void;
+  public abstract markAsNew(): void;
 
   public applyExternalAssignments(keys: ExternalAssignment[], lastOp?: Operation): void {
     const propertyName = getExternallyAssignedProperty(Object.getPrototypeOf(this));
