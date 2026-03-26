@@ -9,6 +9,7 @@ export function InitializeTracked<T extends new (...args: any[]) => any>(
   const wrapped = class extends target {
     constructor(...args: any[]) {
       const tracker = args.find((a): a is Tracker => a instanceof Tracker);
+      const outerSuppressed = tracker?.isTrackingSuppressed ?? false;
       if (tracker) {
         tracker.beginSuppressTracking();
       }
@@ -17,7 +18,7 @@ export function InitializeTracked<T extends new (...args: any[]) => any>(
         tracker.endSuppressTracking();
       }
       validateDecorated(this);
-      if (tracker) {
+      if (tracker && !outerSuppressed) {
         tracker.revalidate();
       }
     }

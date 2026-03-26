@@ -62,6 +62,16 @@ class ValidatedModel extends TrackedObject {
   }
 }
 
+@InitializeTracked
+class RequiredNameModel extends TrackedObject {
+  @Tracked((_, v: string) => (!v ? "Name is required" : undefined))
+  accessor name: string = ""; // empty default → always invalid on construction
+
+  constructor(tracker: Tracker) {
+    super(tracker);
+  }
+}
+
 // ---- Sequential changes ----
 
 describe("TrackedObject – sequential changes create separate undo steps", () => {
@@ -390,5 +400,59 @@ describe("TrackedObject – canCommitChanged", () => {
     invoice.status = "active";
 
     expect(calls).toEqual([]);
+  });
+});
+
+// ---- Bulk construction ----
+
+describe("TrackedObject – bulk construction with withTrackingSuppressed", () => {
+  it("isValid is stale (not updated) while construction is suppressed", () => {
+    const tracker = new Tracker();
+    expect(tracker.isValid).toBe(true);
+
+    tracker.withTrackingSuppressed(() => {
+      new RequiredNameModel(tracker); // invalid: name = ""
+    });
+
+    // revalidate() was skipped — isValid has not been updated yet
+    expect(tracker.isValid).toBe(true);
+  });
+
+  it("isValid is correct after manual revalidate() following suppressed bulk construction", () => {
+    const tracker = new Tracker();
+
+    tracker.withTrackingSuppressed(() => {
+      new RequiredNameModel(tracker);
+      new RequiredNameModel(tracker);
+      new RequiredNameModel(tracker);
+    });
+
+    tracker.revalidate();
+
+    expect(tracker.isValid).toBe(false);
+  });
+
+  it("single construction without outer suppression updates isValid immediately", () => {
+    const tracker = new Tracker();
+
+    new RequiredNameModel(tracker); // revalidate() runs inside @InitializeTracked
+
+    expect(tracker.isValid).toBe(false);
+  });
+
+  it("bulk construction then revalidate produces the same validity as sequential construction", () => {
+    const tracker1 = new Tracker();
+    tracker1.withTrackingSuppressed(() => {
+      new RequiredNameModel(tracker1);
+      new RequiredNameModel(tracker1);
+    });
+    tracker1.revalidate();
+
+    const tracker2 = new Tracker();
+    new RequiredNameModel(tracker2);
+    new RequiredNameModel(tracker2);
+
+    expect(tracker1.isValid).toBe(tracker2.isValid);
+    expect(tracker1.trackedObjects.length).toBe(tracker2.trackedObjects.length);
   });
 });

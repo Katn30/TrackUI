@@ -31,7 +31,6 @@ import {
   InitializeTracked,
   Tracked,
   TrackedCollection,
-  ObjectState,
 } from 'trackui';
 
 const tracker = new Tracker();
@@ -116,9 +115,35 @@ tracker.undo(); // reverts all four at once → status = ''
 
 `Date`, `boolean`, and `object` properties are never coalesced.
 
+To disable coalescing for a specific `string` or `number` property while leaving it enabled globally, pass `{ noCoalesce: true }` to `@Tracked()`:
+
+```typescript
+@Tracked(undefined, { noCoalesce: true })
+accessor version: number = 0; // every increment is its own undo step
+```
+
 ### Construction is always suppressed
 
 `@InitializeTracked` wraps the constructor so that all property writes during construction are silently applied without creating undo entries. The tracker is clean and `canUndo` is `false` immediately after `new Model(tracker)`.
+
+### Bulk construction
+
+After each constructor, `@InitializeTracked` calls `tracker.revalidate()` to roll up validation state. For a single object this is fine, but constructing many objects in a loop means one full revalidation pass per object — O(n²) total.
+
+To keep bulk creation O(n), wrap the loop in `tracker.withTrackingSuppressed()` and call `tracker.revalidate()` once afterward. `@InitializeTracked` detects that suppression is already active and skips its own `revalidate()` call:
+
+```typescript
+tracker.withTrackingSuppressed(() => {
+  for (const row of serverRows) {
+    const item = new ItemModel(tracker);
+    item._committedState = VersionedObjectState.Unchanged;
+    item.name = row.name;
+  }
+});
+tracker.revalidate(); // one pass over all objects
+```
+
+> **Contract:** when you suppress tracking around bulk construction, you take responsibility for calling `tracker.revalidate()` once after the loop. Omitting it leaves `tracker.isValid` stale.
 
 ---
 
@@ -146,7 +171,7 @@ const tracker = new Tracker(undefined);         // coalescing disabled
 | `isDirtyChanged` | `TypedEvent<boolean>` | Fires whenever `isDirty` changes |
 | `isValidChanged` | `TypedEvent<boolean>` | Fires whenever `isValid` changes |
 | `canCommitChanged` | `TypedEvent<boolean>` | Fires whenever `canCommit` changes |
-| `tracked` | `TrackedObject[]` | All registered models |
+| `trackedObjects` | `TrackedObjectBase[]` | All registered models |
 | `trackedCollections` | `TrackedCollection<any>[]` | All registered collections |
 
 **Undo / redo**
@@ -188,7 +213,9 @@ Suppression is **nestable** via a counter, so calling `beginSuppressTracking()` 
 
 ### `TrackedObject` + `@InitializeTracked`
 
-`TrackedObject` is the abstract base class for all trackable models. Every subclass must also be decorated with `@InitializeTracked`.
+`TrackedObject` is the abstract base class for all trackable models in **non-versioned (standard CRUD) databases**. For versioned (temporal) databases see [`VersionedTrackedObject`](#versionedtrackedobject) below.
+
+Every subclass must also be decorated with `@InitializeTracked`.
 
 ```typescript
 @InitializeTracked
@@ -202,7 +229,7 @@ class InvoiceModel extends TrackedObject {
 The `@InitializeTracked` decorator:
 - Suppresses tracking for the entire constructor body
 - Runs validators once after construction
-- Triggers a tracker-wide revalidation
+- Triggers a tracker-wide `revalidate()` — **unless** the caller has already suppressed tracking (see [Bulk construction](#bulk-construction) above)
 
 **Model properties and methods**
 
@@ -213,7 +240,7 @@ The `@InitializeTracked` decorator:
 | `dirtyCounter` | `number` | Net number of tracked changes since last save. Increments on every tracked write, decrements on undo |
 | `isValid` | `boolean` | `true` when all `@Tracked()` validators pass |
 | `validationMessages` | `Map<string, string>` | Maps property name → error message for each failing validator |
-| `state` | `ObjectState` | Computed DB operation required at save time (see `ObjectState` below) |
+| `state` | `ObjectState` | Computed DB operation required at save time |
 | `_committedState` | `ObjectState` | The persisted state (write with `withTrackingSuppressed` when loading from DB) |
 | `destroy()` | `void` | Removes this model from the tracker |
 | `onCommitted()` | `void` | Called automatically by `tracker.onCommit()` — resets `dirtyCounter` to `0` |
@@ -222,7 +249,7 @@ The `@InitializeTracked` decorator:
 
 ### `ObjectState`
 
-Encodes exactly what DB operation each tracked object requires at save time. Read via `obj.state`.
+Used by `TrackedObject` for non-versioned CRUD databases. Read via `obj.state`.
 
 ```typescript
 import { ObjectState } from 'trackui';
@@ -232,11 +259,8 @@ import { ObjectState } from 'trackui';
 |---|---|---|
 | `New` | Created by user, never saved | INSERT |
 | `Unchanged` | Loaded from DB or just saved — no pending action | — |
-| `Edited` | `Unchanged` + unsaved property changes (derived) | Close + INSERT |
-| `Deleted` | Removed from a `TrackedCollection` | SOFT DELETE |
-| `InsertReverted` | A saved insert was undone | HARD DELETE |
-| `EditReverted` | A saved edit was undone | HARD DELETE new version + REOPEN previous version |
-| `DeleteReverted` | A saved delete was undone | REOPEN |
+| `Edited` | `Unchanged` + unsaved property changes (derived) | UPDATE |
+| `Deleted` | Removed from a `TrackedCollection` | DELETE |
 
 `Edited` is **derived**: when `_committedState === Unchanged` and the object has unsaved property changes (`isDirty === true`), `state` returns `Edited`. It is never stored directly.
 
@@ -244,56 +268,18 @@ import { ObjectState } from 'trackui';
 
 ```typescript
 tracker.withTrackingSuppressed(() => {
-  const order = new OrderModel(tracker);
-  order._committedState = ObjectState.Unchanged;
-  order.description = 'Widget'; // direct write, not tracked
+  const invoice = new InvoiceModel(tracker);
+  invoice._committedState = ObjectState.Unchanged;
+  invoice.status = 'active'; // direct write, not tracked
 });
 ```
 
-**Saving — state transitions are automatic:**
-
-Call `tracker.onCommit()` after a successful save. It automatically transitions every tracked object to `Unchanged` and appends the state change into the user's last undo operation — undo atomically reverts both the user's changes and the save state together.
+**Saving:**
 
 ```typescript
-// Read states before sending to the server:
 for (const obj of tracker.trackedObjects) {
+  if (!(obj instanceof InvoiceModel)) continue;
   switch (obj.state) {
-    case ObjectState.New:            /* INSERT */ break;
-    case ObjectState.Edited:         /* Close + INSERT */ break;
-    case ObjectState.Deleted:        /* SOFT DELETE */ break;
-    case ObjectState.InsertReverted: /* HARD DELETE */ break;
-    case ObjectState.EditReverted:   /* HARD DELETE new + REOPEN previous */ break;
-    case ObjectState.DeleteReverted: /* REOPEN */ break;
-    case ObjectState.Unchanged:      break;
-  }
-}
-
-// After the server confirms success:
-tracker.onCommit(); // all objects → Unchanged; isDirty → false
-```
-
-**Versioned vs non-versioned databases:**
-
-`obj.state` is designed for **versioned (temporal) databases** where records are never modified in-place — edits close the current row and insert a new version, and deletes are soft. The `*Reverted` states are necessary here because undoing a save requires distinct DB operations:
-
-| State | Versioned DB action |
-|---|---|
-| `InsertReverted` | HARD DELETE the inserted row |
-| `EditReverted` | HARD DELETE the new row + REOPEN the previous row |
-| `DeleteReverted` | REOPEN (clear end date / restore) |
-
-For **non-versioned (standard CRUD) databases**, the `*Reverted` states map to simpler equivalents. Use `obj.nonVersionedState()` instead of `obj.state`:
-
-| State | Equivalent | Non-versioned DB action |
-|---|---|---|
-| `InsertReverted` | `Deleted` | DELETE the row |
-| `EditReverted` | `Edited` | UPDATE with current (reverted) values |
-| `DeleteReverted` | `Edited` (soft-delete) or `New` (hard-delete) | UPDATE to restore, or re-INSERT |
-
-```typescript
-// Non-versioned DB — soft-delete (default):
-for (const obj of tracker.trackedObjects) {
-  switch (obj.nonVersionedState()) {
     case ObjectState.New:       /* INSERT */ break;
     case ObjectState.Edited:    /* UPDATE */ break;
     case ObjectState.Deleted:   /* DELETE */ break;
@@ -301,26 +287,363 @@ for (const obj of tracker.trackedObjects) {
   }
 }
 
-// Non-versioned DB — hard-delete: pass true to treat DeleteReverted as New (re-INSERT)
-obj.nonVersionedState(true);
+await saveToServer();
+
+tracker.onCommit(); // all objects → Unchanged; isDirty → false
 ```
 
-**Deleted state on collection removal:**
+---
 
-When a `TrackedObject` is removed from a `TrackedCollection`, its `state` is automatically set to `Deleted`. Undoing the collection removal restores the previous state atomically — both changes land in the same undo step.
+### `VersionedTrackedObject`
+
+Use this instead of `TrackedObject` when your database is **versioned (temporal)** — records are never modified in-place; edits close the current row and insert a new version, and deletes are soft.
+
+`VersionedTrackedObject` is also the right choice even for standard CRUD databases if you need the `*Reverted` states — i.e., your app must react when the user undoes a previously committed save.
 
 ```typescript
-const order = new OrderModel(tracker);
-order._committedState = ObjectState.Unchanged;
-order.pk = 5;
-const collection = new TrackedCollection<OrderModel>(tracker, [order]);
+import {
+  VersionedTrackedObject,
+  VersionedObjectState,
+  ExternallyAssigned,
+  InitializeTracked,
+  Tracked,
+} from 'trackui';
 
-collection.remove(order);
-order.state; // ObjectState.Deleted
+@InitializeTracked
+class OrderModel extends VersionedTrackedObject {
+  @ExternallyAssigned
+  id: number = 0;
+
+  @Tracked()
+  accessor description: string = '';
+
+  constructor(tracker: Tracker) {
+    super(tracker);
+  }
+}
+```
+
+**Additional members** (on top of `TrackedObject`'s API)
+
+| Member | Type | Description |
+|---|---|---|
+| `state` | `VersionedObjectState` | 7-state version of `ObjectState` (see below) |
+| `_committedState` | `VersionedObjectState` | The persisted state |
+| `pendingHardDeletes` | `Set<number>` | Real DB ids that must be hard-deleted on the server before the next insert of this object |
+
+---
+
+### `VersionedObjectState`
+
+```typescript
+import { VersionedObjectState } from 'trackui';
+```
+
+| Value | Meaning | Required DB operation |
+|---|---|---|
+| `New` | Created by user, never saved | INSERT |
+| `Unchanged` | Loaded from DB or just saved — no pending action | — |
+| `Edited` | `Unchanged` + unsaved property changes (derived) | Close current row + INSERT new version |
+| `Deleted` | Removed from a `TrackedCollection` | SOFT DELETE |
+| `InsertReverted` | A saved insert was undone | HARD DELETE the inserted row |
+| `EditReverted` | A saved edit was undone | HARD DELETE new version + REOPEN previous version |
+| `DeleteReverted` | A saved delete was undone | REOPEN (clear end date / restore) |
+
+`Edited` is **derived**, exactly as in `ObjectState`.
+
+The three `*Reverted` states arise when the user undoes a `tracker.onCommit()` call. Each encodes the fact that a row now exists in the database that the user has logically rolled back, requiring an explicit compensating write on the server.
+
+**Loading from DB:**
+
+```typescript
+tracker.withTrackingSuppressed(() => {
+  const order = new OrderModel(tracker);
+  order._committedState = VersionedObjectState.Unchanged;
+  order.id = 42;
+  order.description = 'Widget';
+});
+```
+
+---
+
+### Versioned save lifecycle
+
+This is the complete pattern a client should follow when saving with `VersionedTrackedObject`. Three concerns must be handled: deciding what DB operations each object needs, managing placeholder IDs for new rows, and issuing hard deletes when an insert is undone.
+
+#### Step 1 — read pending operations
+
+Before sending anything to the server, iterate `tracker.trackedObjects` and read `state` and `pendingHardDeletes` on each `VersionedTrackedObject`:
+
+```typescript
+import { VersionedTrackedObject, VersionedObjectState } from 'trackui';
+
+interface SavePayload {
+  inserts:      { placeholder: number; data: unknown }[];
+  updates:      { id: number;          data: unknown }[];
+  softDeletes:  { id: number }[];
+  hardDeletes:  { id: number }[];
+  reopens:      { id: number }[];
+}
+
+function buildPayload(tracker: Tracker): SavePayload {
+  const payload: SavePayload = {
+    inserts: [], updates: [], softDeletes: [],
+    hardDeletes: [], reopens: [],
+  };
+
+  // Assign placeholder IDs to all objects that need a new DB row
+  tracker.beforeCommit();
+
+  for (const obj of tracker.trackedObjects) {
+    if (!(obj instanceof VersionedTrackedObject)) continue;
+
+    // Hard deletes that must reach the server before the new insert
+    for (const id of obj.pendingHardDeletes) {
+      payload.hardDeletes.push({ id });
+    }
+
+    switch (obj.state) {
+      case VersionedObjectState.New:
+        // id is a negative placeholder assigned by beforeCommit()
+        payload.inserts.push({ placeholder: obj.id, data: serialize(obj) });
+        break;
+
+      case VersionedObjectState.Edited:
+        // Close current DB row + insert new version
+        payload.softDeletes.push({ id: obj.id });
+        payload.inserts.push({ placeholder: obj.id, data: serialize(obj) });
+        break;
+
+      case VersionedObjectState.Deleted:
+        payload.softDeletes.push({ id: obj.id });
+        break;
+
+      case VersionedObjectState.InsertReverted:
+        // pendingHardDeletes already added above; optionally re-insert
+        payload.inserts.push({ placeholder: obj.id, data: serialize(obj) });
+        break;
+
+      case VersionedObjectState.EditReverted:
+        // Hard delete new row + reopen the previous row
+        // pendingHardDeletes already added above
+        payload.reopens.push({ id: obj.previousId }); // your domain logic
+        break;
+
+      case VersionedObjectState.DeleteReverted:
+        payload.reopens.push({ id: obj.id });
+        break;
+
+      case VersionedObjectState.Unchanged:
+        break;
+    }
+  }
+
+  return payload;
+}
+```
+
+> **Order matters:** hard deletes in `pendingHardDeletes` must be sent to the server **before** (or in the same transaction as) the new insert for the same object, because the previous DB row for that id must not conflict with the incoming insert.
+
+#### Step 2 — send to server and receive real IDs
+
+```typescript
+const payload = buildPayload(tracker);
+const response = await api.save(payload);
+// response.ids: Array<{ placeholder: number; value: number }>
+```
+
+#### Step 3 — apply real IDs and mark clean
+
+```typescript
+tracker.onCommit(response.ids);
+// Every VersionedTrackedObject → state Unchanged
+// Placeholder IDs replaced with real DB ids
+// tracker.isDirty === false
+```
+
+After a successful `onCommit`, clear `pendingHardDeletes` on each object to avoid re-sending them on the next cycle:
+
+```typescript
+for (const obj of tracker.trackedObjects) {
+  if (obj instanceof VersionedTrackedObject) {
+    obj.pendingHardDeletes.clear();
+  }
+}
+```
+
+#### Step 4 — handling rollback
+
+If the server returns an error, do **not** call `tracker.onCommit()`. The tracker remains dirty, `state` values are unchanged, and the user can continue editing or retry.
+
+---
+
+#### Complete versioned save example
+
+```typescript
+import {
+  Tracker,
+  VersionedTrackedObject,
+  VersionedObjectState,
+  InitializeTracked,
+  Tracked,
+  ExternallyAssigned,
+  TrackedCollection,
+} from 'trackui';
+
+const tracker = new Tracker();
+
+@InitializeTracked
+class OrderLine extends VersionedTrackedObject {
+  @ExternallyAssigned
+  id: number = 0;
+
+  @Tracked((_, v) => !v ? 'Description is required' : undefined)
+  accessor description: string = '';
+
+  @Tracked((_, v) => v <= 0 ? 'Quantity must be positive' : undefined)
+  accessor quantity: number = 1;
+
+  constructor(tracker: Tracker) {
+    super(tracker);
+  }
+}
+
+@InitializeTracked
+class OrderModel extends VersionedTrackedObject {
+  @ExternallyAssigned
+  id: number = 0;
+
+  @Tracked((_, v) => !v ? 'Status is required' : undefined)
+  accessor status: string = '';
+
+  readonly lines: TrackedCollection<OrderLine>;
+
+  constructor(tracker: Tracker) {
+    super(tracker);
+    this.lines = new TrackedCollection<OrderLine>(
+      tracker,
+      [],
+      (list) => list.length === 0 ? 'At least one line is required' : undefined,
+    );
+  }
+}
+
+// ---- Create and edit ----
+
+const order = new OrderModel(tracker);
+const line1 = new OrderLine(tracker);
+
+order.status = 'draft';
+line1.description = 'Widget';
+line1.quantity = 3;
+order.lines.push(line1);
+
+// ---- Save (insert) ----
+
+tracker.beforeCommit();
+// order.id === -1, line1.id === -2
+
+const response1 = await api.save({
+  inserts: [
+    { placeholder: order.id, data: { status: order.status } },
+    { placeholder: line1.id, data: { description: line1.description, quantity: line1.quantity } },
+  ],
+});
+// response1.ids: [{ placeholder: -1, value: 10 }, { placeholder: -2, value: 20 }]
+
+tracker.onCommit(response1.ids);
+// order.id === 10, line1.id === 20, state === Unchanged
+
+// ---- User edits and saves again ----
+
+order.status = 'confirmed';
+
+tracker.beforeCommit();
+// order.id is already positive — untouched by beforeCommit
+
+const response2 = await api.save({
+  // Close row 10, open new version
+  softDeletes: [{ id: order.id }],
+  inserts: [{ placeholder: order.id, data: { status: order.status } }],
+});
+
+tracker.onCommit(response2.ids);
+
+// ---- User undoes the second save ----
 
 tracker.undo();
-order.state; // ObjectState.Unchanged — restored alongside collection
+// order.state === EditReverted
+// order.pendingHardDeletes contains the id of the new version that must be hard-deleted
+
+// ---- Re-save from EditReverted ----
+
+tracker.beforeCommit(); // reassigns a fresh placeholder (current id is negative placeholder)
+
+const toHardDelete = [...order.pendingHardDeletes]; // ids to remove from DB
+
+const response3 = await api.save({
+  hardDeletes: toHardDelete.map(id => ({ id })),
+  reopens: [{ id: 10 }], // reopen the previous version
+});
+
+tracker.onCommit(response3.ids);
+
+// Clear pendingHardDeletes now that the server has processed them
+for (const obj of tracker.trackedObjects) {
+  if (obj instanceof VersionedTrackedObject) {
+    obj.pendingHardDeletes.clear();
+  }
+}
 ```
+
+---
+
+### `@ExternallyAssigned`
+
+Marks a numeric ID property as assigned by the server. Works with both `TrackedObject` and `VersionedTrackedObject`. Enables the `beforeCommit` / `onCommit` lifecycle for ID management.
+
+```typescript
+@InitializeTracked
+class InvoiceModel extends TrackedObject {
+  @ExternallyAssigned
+  id: number = 0;
+
+  @Tracked()
+  accessor status: string = '';
+
+  constructor(tracker: Tracker) {
+    super(tracker);
+  }
+}
+```
+
+**Typical save flow:**
+
+```typescript
+const invoice = new InvoiceModel(tracker);
+invoice.status = 'draft';
+
+// 1. Just before sending to the server:
+tracker.beforeCommit();
+// invoice.id is now -1 (a temporary placeholder)
+// Multiple new models get -1, -2, -3, ...
+
+// 2. Send to server, receive real IDs back:
+const serverIds = [{ placeholder: invoice.id, value: 42 }];
+
+// 3. Apply real IDs and mark clean:
+tracker.onCommit(serverIds);
+// invoice.id is now 42
+// tracker.isDirty is false
+```
+
+`beforeCommit()` only assigns a placeholder if the property's current value is `≤ 0`. Models that already have a positive ID are left untouched.
+
+`onCommit()` with no arguments (or an empty array) still marks the tracker as clean — it just skips the ID replacement step.
+
+The placeholder counter never resets — each cycle continues from where it left off — so placeholder IDs are globally unique across the lifetime of the tracker and can never collide across save cycles.
+
+**Undo restores the placeholder, not zero.** When the user undoes an `onCommit()`, the ID reverts to the negative placeholder that was active at save time (not `0`). This means `beforeCommit()` on the next cycle sees `id < 0` and correctly assigns a fresh unique placeholder.
 
 ---
 
@@ -408,6 +731,28 @@ invoice.status = '';      // no-op (already '')
 invoice.status = null;    // no-op (null ≡ '')
 invoice.status = 'draft'; // recorded
 invoice.status = 'draft'; // no-op
+```
+
+**Options**
+
+An optional second argument controls decorator behaviour:
+
+```typescript
+@Tracked(validator?, options?)
+```
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `noCoalesce` | `boolean` | `false` | When `true`, rapid consecutive writes always create separate undo steps, even if they fall within the tracker's coalescing window |
+
+```typescript
+// Validator + noCoalesce together:
+@Tracked((_, v) => v < 0 ? 'Must be positive' : undefined, { noCoalesce: true })
+accessor quantity: number = 0;
+
+// noCoalesce only (no validator):
+@Tracked(undefined, { noCoalesce: true })
+accessor version: number = 0;
 ```
 
 **Supported property types:** `string`, `number`, `boolean`, `Date`, `object`. Unsupported types throw at runtime.
@@ -512,53 +857,6 @@ tracker.undo();         // items back to [], itemCount back to 0
 
 ---
 
-### `@ExternallyAssigned`
-
-Marks a numeric ID property as assigned by an external system (e.g. a database). Enables the `beforeCommit` / `afterCommit` lifecycle for ID management.
-
-```typescript
-@InitializeTracked
-class InvoiceModel extends TrackedObject {
-  @ExternallyAssigned
-  id: number = 0;
-
-  @Tracked()
-  accessor status: string = '';
-
-  constructor(tracker: Tracker) {
-    super(tracker);
-  }
-}
-```
-
-**Typical save flow:**
-
-```typescript
-const invoice = new InvoiceModel(tracker);
-invoice.status = 'draft';
-
-// 1. Just before sending to the server:
-tracker.beforeCommit();
-// invoice.id is now -1 (a temporary placeholder)
-// Multiple new models get -1, -2, -3, ...
-
-// 2. Send to server, receive real IDs back:
-const serverIds = [{ placeholder: invoice.id, value: 42 }];
-
-// 3. Apply real IDs and mark clean:
-tracker.onCommit(serverIds);
-// invoice.id is now 42
-// tracker.isDirty is false
-```
-
-`beforeCommit()` only assigns a placeholder if the property's current value is `0` (the default). Models that already have a positive ID are left untouched.
-
-`onCommit()` with no arguments (or an empty array) still marks the tracker as clean — it just skips the ID replacement step.
-
-The placeholder counter never resets — each `onCommit()` cycle continues from where it left off — so placeholder IDs are globally unique across the lifetime of the tracker and can never collide across save cycles.
-
----
-
 ### `TypedEvent<T>`
 
 A lightweight, strongly-typed event emitter. Used internally for `tracker.isDirtyChanged`, `tracker.isValidChanged`, and `TrackedCollection.changed`, and available for your own use.
@@ -583,95 +881,6 @@ event.emit('world');  // → (nothing)
 | `subscribe(handler)` | `() => void` | Registers a listener. Returns an unsubscriber |
 | `unsubscribe(handler)` | `void` | Removes a specific listener |
 | `emit(value)` | `void` | Calls all registered listeners with the given value |
-
----
-
-## Full example — form with undo, validation, and save lifecycle
-
-```typescript
-import {
-  Tracker,
-  TrackedObject,
-  InitializeTracked,
-  Tracked,
-  TrackedCollection,
-  ExternallyAssigned,
-} from 'trackui';
-
-const tracker = new Tracker();
-
-@InitializeTracked
-class LineItem extends TrackedObject {
-  @ExternallyAssigned
-  id: number = 0;
-
-  @Tracked((_, v) => !v ? 'Description is required' : undefined)
-  accessor description: string = '';
-
-  @Tracked((_, v) => v <= 0 ? 'Quantity must be positive' : undefined)
-  accessor quantity: number = 1;
-
-  constructor(tracker: Tracker) {
-    super(tracker);
-  }
-}
-
-@InitializeTracked
-class InvoiceModel extends TrackedObject {
-  @ExternallyAssigned
-  id: number = 0;
-
-  @Tracked((_, v) => !v ? 'Status is required' : undefined)
-  accessor status: string = '';
-
-  readonly lines: TrackedCollection<LineItem>;
-
-  constructor(tracker: Tracker) {
-    super(tracker);
-    this.lines = new TrackedCollection<LineItem>(
-      tracker,
-      [],
-      (list) => list.length === 0 ? 'At least one line is required' : undefined,
-    );
-  }
-}
-
-// --- Usage ---
-
-const invoice = new InvoiceModel(tracker);
-const line1 = new LineItem(tracker);
-
-invoice.status = 'draft';
-line1.description = 'Widget';
-line1.quantity = 5;
-invoice.lines.push(line1);
-
-tracker.isDirty;        // true
-tracker.isValid;        // true
-
-tracker.undo();         // removes line1 from invoice.lines
-tracker.isValid;        // false — collection is now empty
-
-tracker.redo();         // re-adds line1
-tracker.isValid;        // true
-
-// Before saving to the server:
-tracker.beforeCommit();
-// invoice.id === -1, line1.id === -2
-
-const response = [
-  { placeholder: -1, value: 100 },
-  { placeholder: -2, value: 201 },
-];
-tracker.onCommit(response);
-// invoice.id === 100, line1.id === 201
-// tracker.isDirty === false
-
-// React to save-readiness changes:
-tracker.canCommitChanged.subscribe((canCommit) => {
-  saveButton.disabled = !canCommit;
-});
-```
 
 ---
 
