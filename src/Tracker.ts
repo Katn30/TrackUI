@@ -208,8 +208,9 @@ export class Tracker {
 
   private isCoalescibleType(properties: OperationProperties): boolean {
     return (
-      properties.type === PropertyType.String ||
-      properties.type === PropertyType.Number
+      !properties.noCoalesce &&
+      (properties.type === PropertyType.String ||
+        properties.type === PropertyType.Number)
     );
   }
 

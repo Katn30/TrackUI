@@ -6,6 +6,7 @@ import { registerPropertyValidator } from "./Registry";
 
 export function Tracked<T extends TrackedObjectBase, V>(
   validator?: (self: T, newValue: V) => string | undefined,
+  options?: { noCoalesce?: boolean },
 ) {
   function decorator(
     target: ClassAccessorDecoratorTarget<T, V>,
@@ -52,6 +53,7 @@ export function Tracked<T extends TrackedObjectBase, V>(
             propertyName,
             getPropertyType(newValue, oldValue),
             validator ? (model: any, v: any) => validator(model, v) : undefined,
+            options?.noCoalesce,
           );
 
           this.tracker.doAndTrack(

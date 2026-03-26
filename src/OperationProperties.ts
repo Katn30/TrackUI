@@ -10,5 +10,6 @@ export class OperationProperties {
       trackedObjects: any,
       newValue: any,
     ) => string | undefined,
+    public readonly noCoalesce?: boolean,
   ) {}
 }
