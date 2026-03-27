@@ -26,6 +26,7 @@ export class Tracker {
   private _isValid: boolean;
   private _canCommit: boolean;
   private _externallyAssignedPlaceholderCounter = -1;
+  private _invalidCount = 0;
 
   public readonly coalescingWindowMs: number | undefined;
 
@@ -111,17 +112,16 @@ export class Tracker {
 
   public trackObject(trackedObject: TrackedObjectBase) {
     this.trackedObjects.push(trackedObject);
-    this.isValid = this.isValid && trackedObject.isValid;
   }
 
   public untrackObject(trackedObject: TrackedObjectBase) {
     this.trackedObjects.splice(this.trackedObjects.indexOf(trackedObject), 1);
-    this.revalidate();
+    if (!trackedObject.isValid) this._invalidCount--;
+    this.isValid = this._invalidCount === 0;
   }
 
   public trackCollection(trackedCollection: TrackedCollection<any>): void {
     this.trackedCollections.push(trackedCollection);
-    this.isValid = this.isValid && trackedCollection.isValid;
   }
 
   public untrackCollection(trackedCollection: TrackedCollection<any>) {
@@ -129,7 +129,16 @@ export class Tracker {
       this.trackedCollections.indexOf(trackedCollection),
       1,
     );
-    this.revalidate();
+    if (!trackedCollection.isValid) this._invalidCount--;
+    this.isValid = this._invalidCount === 0;
+  }
+
+  public onValidityChanged(wasValid: boolean, isNowValid: boolean): void {
+    if (wasValid && !isNowValid) this._invalidCount++;
+    else if (!wasValid && isNowValid) this._invalidCount--;
+    if (!this.isTrackingSuppressed) {
+      this.isValid = this._invalidCount === 0;
+    }
   }
 
   public withTrackingSuppressed(action: () => void): void {
@@ -297,8 +306,6 @@ export class Tracker {
   public revalidate(): void {
     this.trackedObjects.forEach((x) => validate(x));
     this.trackedCollections.forEach((x) => x.validate());
-    this.isValid =
-      this.trackedObjects.every((x) => x.isValid) &&
-      this.trackedCollections.every((x) => x.isValid);
+    this.isValid = this._invalidCount === 0;
   }
 }

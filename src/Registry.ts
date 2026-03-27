@@ -20,11 +20,14 @@ export function registerPropertyValidator(
   }
 }
 
-export function validate(model: ITrackedItem): void {
-  const proto = Object.getPrototypeOf(model);
+export function validate(tracked: ITrackedItem): void {
+  const proto = Object.getPrototypeOf(tracked);
   if (!(VALIDATORS in proto)) return;
   const validators = (proto as any)[VALIDATORS] as ValidatorMap;
+  const messages = new Map<string, string>();
   validators.forEach((validatorFn, property) => {
-    model.validate(property, validatorFn(model));
+    const error = validatorFn(tracked);
+    if (error !== undefined) messages.set(property, error);
   });
+  tracked.applyValidation(messages);
 }

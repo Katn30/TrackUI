@@ -30,7 +30,11 @@ export class TrackedCollection<T> implements Array<T>, ITracked {
     return this._isValid;
   }
   private set isValid(value: boolean) {
+    const wasValid = this._isValid;
     this._isValid = value;
+    if (wasValid !== value) {
+      this.tracker.onValidityChanged(wasValid, value);
+    }
   }
 
   public get length(): number {
@@ -83,6 +87,10 @@ export class TrackedCollection<T> implements Array<T>, ITracked {
   public validate(): void {
     this.error = this._validator ? this._validator(this.collection) : undefined;
     this.isValid = this.error === undefined;
+  }
+
+  public applyValidation(_messages: Map<string, string>): void {
+    // Collections validate via validate() using their own validator, not the Registry.
   }
 
   public splice(start: number, deleteCount: number, ...items: T[]): T[] {

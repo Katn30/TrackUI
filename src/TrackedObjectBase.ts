@@ -22,7 +22,11 @@ export abstract class TrackedObjectBase implements ITracked {
     return this._isValid;
   }
   private set isValid(value: boolean) {
+    const wasValid = this._isValid;
     this._isValid = value;
+    if (wasValid !== value) {
+      this.tracker.onValidityChanged(wasValid, value);
+    }
   }
 
   public get isDirty(): boolean {
@@ -68,6 +72,11 @@ export abstract class TrackedObjectBase implements ITracked {
     }
     this.validationMessages = new Map(this.validationMessages);
     this.isValid = this.validationMessages.size === 0;
+  }
+
+  public applyValidation(messages: Map<string, string>): void {
+    this.validationMessages = messages;
+    this.isValid = messages.size === 0;
   }
 
   public destroy(): void {
