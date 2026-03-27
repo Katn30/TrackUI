@@ -28,14 +28,12 @@ npm install trackui
 import {
   Tracker,
   TrackedObject,
-  InitializeTracked,
   Tracked,
   TrackedCollection,
 } from 'trackui';
 
 const tracker = new Tracker();
 
-@InitializeTracked
 class InvoiceModel extends TrackedObject {
   @Tracked()
   accessor status: string = '';
@@ -51,7 +49,7 @@ class InvoiceModel extends TrackedObject {
   }
 }
 
-const invoice = new InvoiceModel(tracker);
+const invoice = tracker.construct(() => new InvoiceModel(tracker));
 
 invoice.status = 'draft';     // recorded
 invoice.total = 100;          // recorded
@@ -122,22 +120,73 @@ To disable coalescing for a specific `string` or `number` property while leaving
 accessor version: number = 0; // every increment is its own undo step
 ```
 
-### Construction is always suppressed
+### Construction via tracker.construct()
 
-`@InitializeTracked` wraps the constructor so that all property writes during construction are silently applied without creating undo entries. The tracker is clean and `canUndo` is `false` immediately after `new Model(tracker)`.
+All tracked model objects must be created inside `tracker.construct()`. This call:
+
+- Suppresses tracking for the entire constructor body — property writes during construction are silently applied without creating undo entries
+- Validates the object once after construction
+- Triggers a tracker-wide `revalidate()` to sync `tracker.isValid`
+
+The tracker is clean and `canUndo` is `false` immediately after `tracker.construct()` returns.
+
+**Single object:**
+
+```typescript
+const invoice = tracker.construct(() => new InvoiceModel(tracker));
+```
+
+**Multiple objects at once:**
+
+```typescript
+tracker.construct(() => {
+  new OrderModel(tracker);
+  new OrderLine(tracker);
+});
+```
+
+### Development vs production builds
+
+TrackUI ships two builds: a development build (`dist/dev/`) and a production build (`dist/prod/`).
+
+**Development build** — creating a tracked object outside `tracker.construct()` throws immediately with a descriptive error:
+
+```
+MyModel must be created inside tracker.construct()
+```
+
+This catches accidental bare `new MyModel(tracker)` calls at the earliest possible moment during development.
+
+**Production build** — the construction guard is compiled away entirely. There is zero runtime overhead for the check.
+
+**Build selection is automatic.** Bundlers that support the `exports` field in `package.json` — Vite, webpack 5+, and others — pick the development build when building in development mode and the production build when building for production. Nothing extra is required from consumers; the correct build is selected via the `development` export condition in TrackUI's `package.json`.
+
+### Bulk construction
+
+`tracker.construct()` is the canonical way to create any number of objects — single or many. When constructing multiple objects, pass them all inside a single `tracker.construct()` callback. TrackUI suppresses tracking for the entire block and calls `tracker.revalidate()` exactly once after all objects are constructed, keeping bulk creation O(n):
+
+```typescript
+tracker.construct(() => {
+  for (const row of serverRows) {
+    const item = new ItemModel(tracker);
+    item.name = row.name;
+  }
+});
+// tracker.revalidate() is called once here — not once per object
+```
 
 ### Default state: Unchanged
 
 Both `TrackedObject` and `VersionedTrackedObject` default to `Unchanged` at construction time. This matches the most common scenario — objects are loaded from the database and are already persisted.
 
 ```typescript
-const item = new ItemModel(tracker); // state: Unchanged (DB-loaded default)
+const item = tracker.construct(() => new ItemModel(tracker)); // state: Unchanged (DB-loaded default)
 ```
 
 To create a **new** item that needs to be inserted, add it to a `TrackedCollection` via `push`. The collection is responsible for transitioning the object to `New`:
 
 ```typescript
-const item = new ItemModel(tracker);
+const item = tracker.construct(() => new ItemModel(tracker));
 items.push(item);          // state: New  — tracked, undoable
 tracker.undo();            // state: Unchanged, removed from collection
 ```
@@ -151,27 +200,8 @@ const items = new TrackedCollection<ItemModel>(tracker, [dbItem]); // dbItem sta
 When you need a `New` object outside of a collection, pass the initial state explicitly:
 
 ```typescript
-const item = new ItemModel(tracker, ItemState.New);
+const item = tracker.construct(() => new ItemModel(tracker, ItemState.New));
 ```
-
-### Bulk construction
-
-After each constructor, `@InitializeTracked` calls `tracker.revalidate()` to roll up validation state. For a single object this is fine, but constructing many objects in a loop means one full revalidation pass per object — O(n²) total.
-
-To keep bulk creation O(n), wrap the loop in `tracker.withTrackingSuppressed()` and call `tracker.revalidate()` once afterward. `@InitializeTracked` detects that suppression is already active and skips its own `revalidate()` call:
-
-```typescript
-tracker.withTrackingSuppressed(() => {
-  for (const row of serverRows) {
-    const item = new ItemModel(tracker);
-    item._committedState = VersionedObjectState.Unchanged;
-    item.name = row.name;
-  }
-});
-tracker.revalidate(); // one pass over all objects
-```
-
-> **Contract:** when you suppress tracking around bulk construction, you take responsibility for calling `tracker.revalidate()` once after the loop. Omitting it leaves `tracker.isValid` stale.
 
 ---
 
@@ -221,6 +251,21 @@ tracker.beforeCommit();       // assign temporary negative IDs to new models bef
 
 `onCommit()` automatically transitions every tracked object's `state` to `Unchanged` and appends the state change into the existing last undo operation — so undo atomically reverts both the user's edits and the committed state together (no spurious extra undo steps).
 
+**Object construction**
+
+```typescript
+// Single object — returns the constructed instance
+const model = tracker.construct(() => new MyModel(tracker));
+
+// Multiple objects — returns void
+tracker.construct(() => {
+  new ModelA(tracker);
+  new ModelB(tracker);
+});
+```
+
+`tracker.construct()` suppresses tracking for the entire callback, runs validators once after all objects are created, and calls `tracker.revalidate()` exactly once at the end.
+
 **Tracking suppression**
 
 ```typescript
@@ -239,25 +284,21 @@ Suppression is **nestable** via a counter, so calling `beginSuppressTracking()` 
 
 ---
 
-### `TrackedObject` + `@InitializeTracked`
+### `TrackedObject`
 
 `TrackedObject` is the abstract base class for all trackable models in **non-versioned (standard CRUD) databases**. For versioned (temporal) databases see [`VersionedTrackedObject`](#versionedtrackedobject) below.
 
-Every subclass must also be decorated with `@InitializeTracked`.
+All subclass instances must be created via `tracker.construct()`.
 
 ```typescript
-@InitializeTracked
 class InvoiceModel extends TrackedObject {
   constructor(tracker: Tracker) {
     super(tracker); // registers the model with the tracker
   }
 }
-```
 
-The `@InitializeTracked` decorator:
-- Suppresses tracking for the entire constructor body
-- Runs validators once after construction
-- Triggers a tracker-wide `revalidate()` — **unless** the caller has already suppressed tracking (see [Bulk construction](#bulk-construction) above)
+const invoice = tracker.construct(() => new InvoiceModel(tracker));
+```
 
 **Model properties and methods**
 
@@ -294,10 +335,9 @@ import { ObjectState } from 'trackui';
 
 **Loading from DB:**
 
-Objects default to `Unchanged`, so no extra setup is needed. Property values set inside the constructor are suppressed by `@InitializeTracked`:
+Objects default to `Unchanged`, so no extra setup is needed. Property values set inside the constructor are suppressed by `tracker.construct()`:
 
 ```typescript
-@InitializeTracked
 class InvoiceModel extends TrackedObject {
   @Tracked() accessor status: string = '';
   constructor(tracker: Tracker, data?: { status: string }) {
@@ -306,7 +346,7 @@ class InvoiceModel extends TrackedObject {
   }
 }
 
-const invoice = new InvoiceModel(tracker, { status: 'active' }); // state: Unchanged
+const invoice = tracker.construct(() => new InvoiceModel(tracker, { status: 'active' })); // state: Unchanged
 ```
 
 **Saving:**
@@ -340,11 +380,9 @@ import {
   VersionedTrackedObject,
   VersionedObjectState,
   ExternallyAssigned,
-  InitializeTracked,
   Tracked,
 } from 'trackui';
 
-@InitializeTracked
 class OrderModel extends VersionedTrackedObject {
   @ExternallyAssigned
   id: number = 0;
@@ -356,6 +394,8 @@ class OrderModel extends VersionedTrackedObject {
     super(tracker);
   }
 }
+
+const order = tracker.construct(() => new OrderModel(tracker));
 ```
 
 **Additional members** (on top of `TrackedObject`'s API)
@@ -390,10 +430,9 @@ The three `*Reverted` states arise when the user undoes a `tracker.onCommit()` c
 
 **Loading from DB:**
 
-Objects default to `Unchanged`. Set properties inside the constructor (suppressed by `@InitializeTracked`):
+Objects default to `Unchanged`. Set properties inside the constructor — they are suppressed by `tracker.construct()`:
 
 ```typescript
-@InitializeTracked
 class OrderModel extends VersionedTrackedObject {
   @ExternallyAssigned id: number = 0;
   @Tracked() accessor description: string = '';
@@ -406,14 +445,14 @@ class OrderModel extends VersionedTrackedObject {
   }
 }
 
-const order = new OrderModel(tracker, { id: 42, description: 'Widget' }); // state: Unchanged
+const order = tracker.construct(() => new OrderModel(tracker, { id: 42, description: 'Widget' })); // state: Unchanged
 ```
 
 **Creating a new item:**
 
 ```typescript
-const item = new OrderModel(tracker);  // state: Unchanged
-collection.push(item);                 // state: New — collection sets it
+const item = tracker.construct(() => new OrderModel(tracker)); // state: Unchanged
+collection.push(item);                                         // state: New — collection sets it
 ```
 
 ---
@@ -536,7 +575,6 @@ import {
   Tracker,
   VersionedTrackedObject,
   VersionedObjectState,
-  InitializeTracked,
   Tracked,
   ExternallyAssigned,
   TrackedCollection,
@@ -544,7 +582,6 @@ import {
 
 const tracker = new Tracker();
 
-@InitializeTracked
 class OrderLine extends VersionedTrackedObject {
   @ExternallyAssigned
   id: number = 0;
@@ -560,7 +597,6 @@ class OrderLine extends VersionedTrackedObject {
   }
 }
 
-@InitializeTracked
 class OrderModel extends VersionedTrackedObject {
   @ExternallyAssigned
   id: number = 0;
@@ -582,8 +618,10 @@ class OrderModel extends VersionedTrackedObject {
 
 // ---- Create and edit ----
 
-const order = new OrderModel(tracker);
-const line1 = new OrderLine(tracker);
+const { order, line1 } = tracker.construct(() => ({
+  order: new OrderModel(tracker),
+  line1: new OrderLine(tracker),
+}));
 
 order.status = 'draft';
 line1.description = 'Widget';
@@ -655,7 +693,6 @@ for (const obj of tracker.trackedObjects) {
 Marks a numeric ID property as assigned by the server. Works with both `TrackedObject` and `VersionedTrackedObject`. Enables the `beforeCommit` / `onCommit` lifecycle for ID management.
 
 ```typescript
-@InitializeTracked
 class InvoiceModel extends TrackedObject {
   @ExternallyAssigned
   id: number = 0;
@@ -672,7 +709,7 @@ class InvoiceModel extends TrackedObject {
 **Typical save flow:**
 
 ```typescript
-const invoice = new InvoiceModel(tracker);
+const invoice = tracker.construct(() => new InvoiceModel(tracker));
 invoice.status = 'draft';
 
 // 1. Just before sending to the server:
@@ -706,7 +743,6 @@ The property decorator. Intercepts every write, records an undo/redo pair, and o
 **With `accessor` (recommended):**
 
 ```typescript
-@InitializeTracked
 class ProductModel extends TrackedObject {
   @Tracked()
   accessor name: string = '';
@@ -732,7 +768,6 @@ class ProductModel extends TrackedObject {
 **With `get`/`set`** — decorate the setter:
 
 ```typescript
-@InitializeTracked
 class ProductModel extends TrackedObject {
   private _name: string = '';
 
@@ -752,7 +787,6 @@ class ProductModel extends TrackedObject {
 The validator receives the model instance and the incoming value. Return an error string to fail, `undefined` to pass.
 
 ```typescript
-@InitializeTracked
 class OrderModel extends TrackedObject {
   @Tracked((self, value) => !value ? 'Status is required' : undefined)
   accessor status: string = '';
@@ -885,7 +919,6 @@ items.changed.subscribe((e) => {
 The `changed` event fires **outside** tracking suppression. This means a listener that writes to a `@Tracked()` property composes naturally with the collection mutation — both land in the same undo step:
 
 ```typescript
-@InitializeTracked
 class OrderModel extends TrackedObject {
   @Tracked()
   accessor itemCount: number = 0;
@@ -901,7 +934,7 @@ class OrderModel extends TrackedObject {
   }
 }
 
-const order = new OrderModel(tracker);
+const order = tracker.construct(() => new OrderModel(tracker));
 order.items.push('x');  // itemCount becomes 1
 
 tracker.undo();         // items back to [], itemCount back to 0

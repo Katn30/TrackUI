@@ -2,14 +2,12 @@ import { describe, it, expect } from "vitest";
 import { VersionedTrackedObject } from "../src/VersionedTrackedObject";
 import { VersionedObjectState } from "../src/VersionedObjectState";
 import { Tracker } from "../src/Tracker";
-import { InitializeTracked } from "../src/InitializeTracked";
 import { Tracked } from "../src/Tracked";
 import { TrackedCollection } from "../src/TrackedCollection";
 import { ExternallyAssigned, ExternalAssignment } from "../src/ExternallyAssigned";
 
 // ---- Models ----
 
-@InitializeTracked
 class OrderModel extends VersionedTrackedObject {
   @Tracked()
   accessor description: string = "";
@@ -24,7 +22,6 @@ class OrderModel extends VersionedTrackedObject {
   }
 }
 
-@InitializeTracked
 class ProductModel extends VersionedTrackedObject {
   @ExternallyAssigned
   id: number = 0;
@@ -41,7 +38,7 @@ class ProductModel extends VersionedTrackedObject {
 // ---- Helper ----
 
 function makeUnchangedOrder(tracker: Tracker, description = "Widget"): OrderModel {
-  return new OrderModel(tracker, description);
+  return tracker.construct(() => new OrderModel(tracker, description));
 }
 
 // ---- dirtyCounter ----
@@ -49,14 +46,14 @@ function makeUnchangedOrder(tracker: Tracker, description = "Widget"): OrderMode
 describe("VersionedTrackedObject – dirty state (isDirty / dirtyCounter)", () => {
   it("is not dirty initially", () => {
     const tracker = new Tracker();
-    const order = new OrderModel(tracker);
+    const order = tracker.construct(() => new OrderModel(tracker));
     expect(order.isDirty).toBe(false);
     expect(order.dirtyCounter).toBe(0);
   });
 
   it("becomes dirty after a property change", () => {
     const tracker = new Tracker();
-    const order = new OrderModel(tracker);
+    const order = tracker.construct(() => new OrderModel(tracker));
     order.description = "Alice";
     expect(order.isDirty).toBe(true);
     expect(order.dirtyCounter).toBe(1);
@@ -64,7 +61,7 @@ describe("VersionedTrackedObject – dirty state (isDirty / dirtyCounter)", () =
 
   it("increments dirtyCounter for each property change", () => {
     const tracker = new Tracker();
-    const order = new OrderModel(tracker);
+    const order = tracker.construct(() => new OrderModel(tracker));
     order.description = "Alice";
     order.amount = 30;
     expect(order.dirtyCounter).toBe(2);
@@ -72,7 +69,7 @@ describe("VersionedTrackedObject – dirty state (isDirty / dirtyCounter)", () =
 
   it("undo decrements dirtyCounter", () => {
     const tracker = new Tracker();
-    const order = new OrderModel(tracker);
+    const order = tracker.construct(() => new OrderModel(tracker));
     order.description = "Alice";
     order.amount = 30;
     tracker.undo();
@@ -81,7 +78,7 @@ describe("VersionedTrackedObject – dirty state (isDirty / dirtyCounter)", () =
 
   it("resets dirtyCounter to 0 after onCommitted()", () => {
     const tracker = new Tracker();
-    const order = new OrderModel(tracker);
+    const order = tracker.construct(() => new OrderModel(tracker));
     order.description = "Alice";
     order.onCommitted();
     expect(order.isDirty).toBe(false);
@@ -90,15 +87,15 @@ describe("VersionedTrackedObject – dirty state (isDirty / dirtyCounter)", () =
 
   it("does not mark dirty when setting the same value", () => {
     const tracker = new Tracker();
-    const order = new OrderModel(tracker);
+    const order = tracker.construct(() => new OrderModel(tracker));
     order.description = "";
     expect(order.isDirty).toBe(false);
   });
 
   it("onCommit() resets isDirty on all tracked objects", () => {
     const tracker = new Tracker();
-    const order1 = new OrderModel(tracker, "a");
-    const order2 = new OrderModel(tracker, "b");
+    const order1 = tracker.construct(() => new OrderModel(tracker, "a"));
+    const order2 = tracker.construct(() => new OrderModel(tracker, "b"));
     order1.description = "a-updated";
     order2.description = "b-updated";
     tracker.onCommit();
@@ -112,13 +109,13 @@ describe("VersionedTrackedObject – dirty state (isDirty / dirtyCounter)", () =
 describe("VersionedTrackedObject – initial states", () => {
   it("new object has state Unchanged by default", () => {
     const tracker = new Tracker();
-    const order = new OrderModel(tracker);
+    const order = tracker.construct(() => new OrderModel(tracker));
     expect(order.state).toBe(VersionedObjectState.Unchanged);
   });
 
   it("pushing an Unchanged object into a collection sets its state to New", () => {
     const tracker = new Tracker();
-    const order = new OrderModel(tracker);
+    const order = tracker.construct(() => new OrderModel(tracker));
     const collection = new TrackedCollection<OrderModel>(tracker, []);
     collection.push(order);
     expect(order.state).toBe(VersionedObjectState.New);
@@ -126,7 +123,7 @@ describe("VersionedTrackedObject – initial states", () => {
 
   it("undo of push restores state to Unchanged", () => {
     const tracker = new Tracker();
-    const order = new OrderModel(tracker);
+    const order = tracker.construct(() => new OrderModel(tracker));
     const collection = new TrackedCollection<OrderModel>(tracker, []);
     collection.push(order);
     tracker.undo();
@@ -136,7 +133,7 @@ describe("VersionedTrackedObject – initial states", () => {
 
   it("New object with property changes still has state New, not Edited", () => {
     const tracker = new Tracker();
-    const order = new OrderModel(tracker, "", 0, VersionedObjectState.New);
+    const order = tracker.construct(() => new OrderModel(tracker, "", 0, VersionedObjectState.New));
     order.description = "changed";
     expect(order.state).toBe(VersionedObjectState.New);
   });
@@ -183,7 +180,7 @@ describe("VersionedTrackedObject – Edited derived state", () => {
 describe("VersionedTrackedObject – onCommit() on New object (insert)", () => {
   it("sets state to Unchanged", () => {
     const tracker = new Tracker();
-    const order = new OrderModel(tracker, "", 0, VersionedObjectState.New);
+    const order = tracker.construct(() => new OrderModel(tracker, "", 0, VersionedObjectState.New));
     order.description = "new order";
     tracker.onCommit();
     expect(order.state).toBe(VersionedObjectState.Unchanged);
@@ -191,7 +188,7 @@ describe("VersionedTrackedObject – onCommit() on New object (insert)", () => {
 
   it("undo sets state to InsertReverted", () => {
     const tracker = new Tracker();
-    const order = new OrderModel(tracker, "", 0, VersionedObjectState.New);
+    const order = tracker.construct(() => new OrderModel(tracker, "", 0, VersionedObjectState.New));
     order.description = "new order";
     tracker.onCommit();
 
@@ -202,7 +199,7 @@ describe("VersionedTrackedObject – onCommit() on New object (insert)", () => {
 
   it("redo after undo sets state back to Unchanged", () => {
     const tracker = new Tracker();
-    const order = new OrderModel(tracker, "", 0, VersionedObjectState.New);
+    const order = tracker.construct(() => new OrderModel(tracker, "", 0, VersionedObjectState.New));
     order.description = "new order";
     tracker.onCommit();
     tracker.undo();
@@ -214,7 +211,7 @@ describe("VersionedTrackedObject – onCommit() on New object (insert)", () => {
 
   it("onCommit does not add a spurious extra undo step", () => {
     const tracker = new Tracker(undefined);
-    const order = new OrderModel(tracker, "", 0, VersionedObjectState.New);
+    const order = tracker.construct(() => new OrderModel(tracker, "", 0, VersionedObjectState.New));
     order.description = "new order";
     tracker.onCommit();
 
@@ -300,7 +297,7 @@ describe("VersionedTrackedObject – onCommit() on Deleted object", () => {
 describe("VersionedTrackedObject – onCommit() on *Reverted states", () => {
   it("InsertReverted → onCommit() → Unchanged", () => {
     const tracker = new Tracker();
-    const order = new OrderModel(tracker, "", 0, VersionedObjectState.New);
+    const order = tracker.construct(() => new OrderModel(tracker, "", 0, VersionedObjectState.New));
     order.description = "new order";
     tracker.onCommit();
     tracker.undo();
@@ -359,8 +356,8 @@ describe("VersionedTrackedObject – onCommit() on *Reverted states", () => {
 describe("VersionedTrackedObject – onCommit() on multiple objects", () => {
   it("transitions all New objects to Unchanged atomically", () => {
     const tracker = new Tracker(undefined);
-    const order1 = new OrderModel(tracker, "a");
-    const order2 = new OrderModel(tracker, "b");
+    const order1 = tracker.construct(() => new OrderModel(tracker, "a"));
+    const order2 = tracker.construct(() => new OrderModel(tracker, "b"));
     tracker.onCommit();
     expect(order1.state).toBe(VersionedObjectState.Unchanged);
     expect(order2.state).toBe(VersionedObjectState.Unchanged);
@@ -408,7 +405,7 @@ describe("VersionedTrackedObject – Deleted on collection removal", () => {
 
   it("removing a New object sets its state to Unchanged (never persisted)", () => {
     const tracker = new Tracker(undefined);
-    const order = new OrderModel(tracker);
+    const order = tracker.construct(() => new OrderModel(tracker));
     const collection = new TrackedCollection<OrderModel>(tracker, []);
     collection.push(order); // Unchanged → New
     collection.remove(order); // New → Unchanged
@@ -417,7 +414,7 @@ describe("VersionedTrackedObject – Deleted on collection removal", () => {
 
   it("undo of removing a New object restores state to New", () => {
     const tracker = new Tracker(undefined);
-    const order = new OrderModel(tracker);
+    const order = tracker.construct(() => new OrderModel(tracker));
     const collection = new TrackedCollection<OrderModel>(tracker, []);
     collection.push(order); // Unchanged → New
     collection.remove(order); // New → Unchanged
@@ -466,7 +463,7 @@ describe("VersionedTrackedObject – Deleted on collection removal", () => {
 describe("VersionedTrackedObject – full save/undo/redo cycle", () => {
   it("maintains correct state through insert → edit → edit → delete → undo×4 (saving) → redo×4 (saving)", () => {
     const tracker = new Tracker(undefined);
-    const order = new OrderModel(tracker, "", 0, VersionedObjectState.New);
+    const order = tracker.construct(() => new OrderModel(tracker, "", 0, VersionedObjectState.New));
     const collection = new TrackedCollection<OrderModel>(tracker, [order]);
 
     order.description = "v1";
@@ -533,15 +530,15 @@ describe("VersionedTrackedObject – @ExternallyAssigned / beforeCommit / onComm
   describe("beforeCommit()", () => {
     it("assigns a negative placeholder ID to a new model with no ID", () => {
       const tracker = new Tracker();
-      const product = new ProductModel(tracker, "Widget");
+      const product = tracker.construct(() => new ProductModel(tracker, "Widget"));
       tracker.beforeCommit();
       expect(product.id).toBeLessThan(0);
     });
 
     it("assigns distinct placeholder IDs to multiple new models", () => {
       const tracker = new Tracker();
-      const p1 = new ProductModel(tracker, "A");
-      const p2 = new ProductModel(tracker, "B");
+      const p1 = tracker.construct(() => new ProductModel(tracker, "A"));
+      const p2 = tracker.construct(() => new ProductModel(tracker, "B"));
       tracker.beforeCommit();
       expect(p1.id).toBeLessThan(0);
       expect(p2.id).toBeLessThan(0);
@@ -550,7 +547,7 @@ describe("VersionedTrackedObject – @ExternallyAssigned / beforeCommit / onComm
 
     it("does not overwrite a model that already has a positive ID", () => {
       const tracker = new Tracker();
-      const product = new ProductModel(tracker, "Widget");
+      const product = tracker.construct(() => new ProductModel(tracker, "Widget"));
       tracker.withTrackingSuppressed(() => { product.id = 42; });
       tracker.beforeCommit();
       expect(product.id).toBe(42);
@@ -560,7 +557,7 @@ describe("VersionedTrackedObject – @ExternallyAssigned / beforeCommit / onComm
   describe("onCommit(keys)", () => {
     it("replaces placeholder IDs with real IDs from the server", () => {
       const tracker = new Tracker();
-      const product = new ProductModel(tracker, "Widget");
+      const product = tracker.construct(() => new ProductModel(tracker, "Widget"));
       tracker.beforeCommit();
       const placeholder = product.id;
 
@@ -571,8 +568,8 @@ describe("VersionedTrackedObject – @ExternallyAssigned / beforeCommit / onComm
 
     it("replaces placeholder IDs for multiple models independently", () => {
       const tracker = new Tracker();
-      const p1 = new ProductModel(tracker, "A");
-      const p2 = new ProductModel(tracker, "B");
+      const p1 = tracker.construct(() => new ProductModel(tracker, "A"));
+      const p2 = tracker.construct(() => new ProductModel(tracker, "B"));
       tracker.beforeCommit();
       const ph1 = p1.id;
       const ph2 = p2.id;
@@ -588,7 +585,7 @@ describe("VersionedTrackedObject – @ExternallyAssigned / beforeCommit / onComm
 
     it("onCommit() without keys does not change IDs", () => {
       const tracker = new Tracker();
-      const product = new ProductModel(tracker, "Widget");
+      const product = tracker.construct(() => new ProductModel(tracker, "Widget"));
       tracker.withTrackingSuppressed(() => { product.id = 42; });
       tracker.onCommit();
       expect(product.id).toBe(42);
@@ -596,7 +593,7 @@ describe("VersionedTrackedObject – @ExternallyAssigned / beforeCommit / onComm
 
     it("onCommit() marks tracker as not dirty", () => {
       const tracker = new Tracker();
-      const product = new ProductModel(tracker);
+      const product = tracker.construct(() => new ProductModel(tracker));
       product.name = "Widget";
       tracker.beforeCommit();
       tracker.onCommit([]);
@@ -605,7 +602,7 @@ describe("VersionedTrackedObject – @ExternallyAssigned / beforeCommit / onComm
 
     it("leaves ID unchanged when placeholder is not found in keys array", () => {
       const tracker = new Tracker();
-      const product = new ProductModel(tracker, "Widget");
+      const product = tracker.construct(() => new ProductModel(tracker, "Widget"));
       tracker.beforeCommit();
       const placeholder = product.id;
 
@@ -616,7 +613,7 @@ describe("VersionedTrackedObject – @ExternallyAssigned / beforeCommit / onComm
 
     it("undo of onCommit restores id to the placeholder, not 0", () => {
       const tracker = new Tracker(undefined);
-      const product = new ProductModel(tracker, "Widget");
+      const product = tracker.construct(() => new ProductModel(tracker, "Widget"));
       tracker.beforeCommit();
       const placeholder = product.id;
       product.name = "Widget v2";
@@ -631,7 +628,7 @@ describe("VersionedTrackedObject – @ExternallyAssigned / beforeCommit / onComm
 
     it("beforeCommit reassigns a fresh placeholder after undo (id is negative placeholder)", () => {
       const tracker = new Tracker(undefined);
-      const product = new ProductModel(tracker, "Widget");
+      const product = tracker.construct(() => new ProductModel(tracker, "Widget"));
       tracker.beforeCommit();
       const ph1 = product.id;
       product.name = "Widget v2";
@@ -646,12 +643,12 @@ describe("VersionedTrackedObject – @ExternallyAssigned / beforeCommit / onComm
 
     it("placeholder IDs are unique across save cycles", () => {
       const tracker = new Tracker();
-      const p1 = new ProductModel(tracker);
+      const p1 = tracker.construct(() => new ProductModel(tracker));
       tracker.beforeCommit();
       const ph1 = p1.id;
       tracker.onCommit([{ placeholder: ph1, value: 1 }]);
 
-      const p2 = new ProductModel(tracker);
+      const p2 = tracker.construct(() => new ProductModel(tracker));
       tracker.beforeCommit();
 
       expect(p2.id).toBeLessThan(0);

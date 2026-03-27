@@ -1,13 +1,11 @@
 import { describe, it, expect } from "vitest";
 import { TrackedObject } from "../src/TrackedObject";
 import { Tracker } from "../src/Tracker";
-import { InitializeTracked } from "../src/InitializeTracked";
 import { Tracked } from "../src/Tracked";
 import { TrackedCollection } from "../src/TrackedCollection";
 
 // ---- Models ----
 
-@InitializeTracked
 class OrderModel extends TrackedObject {
   @Tracked()
   accessor itemCount: number = 0;
@@ -28,7 +26,7 @@ class OrderModel extends TrackedObject {
 describe("Tracker – TrackedCollection + TrackedProperty composition via changed event", () => {
   it("collection mutation and listener property change compose into one undo step", () => {
     const tracker = new Tracker();
-    const order = new OrderModel(tracker);
+    const order = tracker.construct(() => new OrderModel(tracker));
 
     order.items.push("item-1");
 
@@ -44,7 +42,7 @@ describe("Tracker – TrackedCollection + TrackedProperty composition via change
 
   it("redo restores both collection and property", () => {
     const tracker = new Tracker();
-    const order = new OrderModel(tracker);
+    const order = tracker.construct(() => new OrderModel(tracker));
 
     order.items.push("item-1");
     tracker.undo();
@@ -56,7 +54,7 @@ describe("Tracker – TrackedCollection + TrackedProperty composition via change
 
   it("multiple pushes each compose with their listener update separately", () => {
     const tracker = new Tracker();
-    const order = new OrderModel(tracker);
+    const order = tracker.construct(() => new OrderModel(tracker));
 
     order.items.push("item-1");
     order.items.push("item-2");

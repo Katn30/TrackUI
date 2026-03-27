@@ -2,11 +2,9 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { TrackedObject } from "../src/TrackedObject";
 import { Tracker } from "../src/Tracker";
 import { Tracked } from "../src/Tracked";
-import { InitializeTracked } from "../src/InitializeTracked";
 
 // ---- Concrete test models ----
 
-@InitializeTracked
 class PersonModel extends TrackedObject {
   @Tracked((self: PersonModel, v: string) =>
     !v ? "Name is required" : undefined,
@@ -26,14 +24,12 @@ class PersonModel extends TrackedObject {
   }
 }
 
-@InitializeTracked
 class EmptyModel extends TrackedObject {
   constructor(tracker: Tracker) {
     super(tracker);
   }
 }
 
-@InitializeTracked
 class ModelWithConstructorInit extends TrackedObject {
   @Tracked()
   accessor value: string = "";
@@ -44,7 +40,6 @@ class ModelWithConstructorInit extends TrackedObject {
   }
 }
 
-@InitializeTracked
 class StrictModel extends TrackedObject {
   @Tracked((_self: StrictModel, v: string) =>
     !v ? "Required" : undefined,
@@ -56,7 +51,6 @@ class StrictModel extends TrackedObject {
   }
 }
 
-@InitializeTracked
 class EventModel extends TrackedObject {
   @Tracked()
   accessor startDate: Date = new Date(0);
@@ -66,7 +60,6 @@ class EventModel extends TrackedObject {
   }
 }
 
-@InitializeTracked
 class ConfigModel extends TrackedObject {
   @Tracked()
   accessor config: Record<string, unknown> = {};
@@ -76,7 +69,6 @@ class ConfigModel extends TrackedObject {
   }
 }
 
-@InitializeTracked
 class NullableModel extends TrackedObject {
   @Tracked()
   accessor label: string | null = null;
@@ -94,11 +86,11 @@ describe("Tracked", () => {
 
   beforeEach(() => {
     tracker = new Tracker();
-    person = new PersonModel(tracker);
+    person = tracker.construct(() => new PersonModel(tracker));
   });
 
   describe("constructor name", () => {
-    it("preserves the class name after @InitializeTracked wrapping", () => {
+    it("preserves the class name", () => {
       expect(person.constructor.name).toBe("PersonModel");
     });
   });
@@ -134,7 +126,6 @@ describe("Tracked", () => {
 
   describe("validation", () => {
     it("is valid initially (default values satisfy validators)", () => {
-      // name = '' triggers required validator at construction via @InitializeTracked
       expect(person.isValid).toBe(false);
       expect(person.validationMessages.get("name")).toBe("Name is required");
     });
@@ -165,7 +156,7 @@ describe("Tracked", () => {
     });
 
     it("model without validators is always valid", () => {
-      const empty = new EmptyModel(tracker);
+      const empty = tracker.construct(() => new EmptyModel(tracker));
       expect(empty.isValid).toBe(true);
     });
   });
@@ -210,25 +201,25 @@ describe("Tracked", () => {
   describe("suppress logic during construction", () => {
     it("does not add undo entries for property assignments in the constructor body", () => {
       const t = new Tracker();
-      new ModelWithConstructorInit(t);
+      t.construct(() => new ModelWithConstructorInit(t));
       expect(t.canUndo).toBe(false);
     });
 
     it("tracker is not dirty after construction even when constructor sets properties", () => {
       const t = new Tracker();
-      new ModelWithConstructorInit(t);
+      t.construct(() => new ModelWithConstructorInit(t));
       expect(t.isDirty).toBe(false);
     });
 
     it("model value set in constructor body is preserved", () => {
       const t = new Tracker();
-      const m = new ModelWithConstructorInit(t);
+      const m = t.construct(() => new ModelWithConstructorInit(t));
       expect(m.value).toBe("initial");
     });
 
     it("property changes after construction are tracked normally", () => {
       const t = new Tracker();
-      const m = new ModelWithConstructorInit(t);
+      const m = t.construct(() => new ModelWithConstructorInit(t));
       m.value = "changed";
       expect(t.canUndo).toBe(true);
       t.undo();
@@ -260,16 +251,16 @@ describe("Tracked", () => {
   describe("multiple models on one tracker", () => {
     it("tracker isValid is false if any model is invalid", () => {
       const t = new Tracker();
-      const m1 = new StrictModel(t);
-      new StrictModel(t);
+      const m1 = t.construct(() => new StrictModel(t));
+      t.construct(() => new StrictModel(t));
       m1.field = "ok";
       expect(t.isValid).toBe(false); // second model's field still ''
     });
 
     it("tracker isValid is true only when all models are valid", () => {
       const t = new Tracker();
-      const m1 = new StrictModel(t);
-      const m2 = new StrictModel(t);
+      const m1 = t.construct(() => new StrictModel(t));
+      const m2 = t.construct(() => new StrictModel(t));
       m1.field = "ok";
       m2.field = "ok";
       expect(t.isValid).toBe(true);
@@ -277,8 +268,8 @@ describe("Tracked", () => {
 
     it("destroying one model removes it from tracker validity check", () => {
       const t = new Tracker();
-      const m1 = new StrictModel(t);
-      const m2 = new StrictModel(t);
+      const m1 = t.construct(() => new StrictModel(t));
+      const m2 = t.construct(() => new StrictModel(t));
       m1.field = "ok";
       // m2 is invalid but we destroy it
       m2.destroy();
@@ -289,7 +280,7 @@ describe("Tracked", () => {
   describe("Date property type", () => {
     it("tracks a Date property change and marks dirty", () => {
       const t = new Tracker();
-      const event = new EventModel(t);
+      const event = t.construct(() => new EventModel(t));
       t.onCommit();
 
       event.startDate = new Date("2024-01-01");
@@ -299,7 +290,7 @@ describe("Tracked", () => {
 
     it("undoes a Date property change", () => {
       const t = new Tracker();
-      const event = new EventModel(t);
+      const event = t.construct(() => new EventModel(t));
       const original = event.startDate;
       t.onCommit();
 
@@ -314,7 +305,7 @@ describe("Tracked", () => {
   describe("Object property type", () => {
     it("tracks an object property change and marks dirty", () => {
       const t = new Tracker();
-      const cfg = new ConfigModel(t);
+      const cfg = t.construct(() => new ConfigModel(t));
       t.onCommit();
 
       cfg.config = { theme: "dark" };
@@ -324,7 +315,7 @@ describe("Tracked", () => {
 
     it("undoes an object property change", () => {
       const t = new Tracker();
-      const cfg = new ConfigModel(t);
+      const cfg = t.construct(() => new ConfigModel(t));
       const original = cfg.config;
       t.onCommit();
 
@@ -339,7 +330,7 @@ describe("Tracked", () => {
   describe("isSameValue — null/undefined initial value set to empty string", () => {
     it("setting null property to empty string does not create an operation", () => {
       const t = new Tracker();
-      const m = new NullableModel(t);
+      const m = t.construct(() => new NullableModel(t));
       // initial value is null; setting to '' should be treated as no change
       m.label = "";
 
@@ -348,7 +339,7 @@ describe("Tracked", () => {
 
     it("setting null property to empty string does not mark dirty", () => {
       const t = new Tracker();
-      const m = new NullableModel(t);
+      const m = t.construct(() => new NullableModel(t));
       t.onCommit();
 
       m.label = "";

@@ -1,13 +1,11 @@
 import { describe, it, expect } from "vitest";
 import { TrackedObject } from "../src/TrackedObject";
 import { Tracker } from "../src/Tracker";
-import { InitializeTracked } from "../src/InitializeTracked";
 import { Tracked } from "../src/Tracked";
 import { TrackedCollection } from "../src/TrackedCollection";
 
 // ---- Models ----
 
-@InitializeTracked
 class InvoiceModel extends TrackedObject {
   @Tracked()
   accessor status: string = "";
@@ -30,7 +28,6 @@ class InvoiceModel extends TrackedObject {
   }
 }
 
-@InitializeTracked
 class PersonModel extends TrackedObject {
   private _name: string = "";
 
@@ -49,7 +46,6 @@ class PersonModel extends TrackedObject {
   }
 }
 
-@InitializeTracked
 class ValidatedModel extends TrackedObject {
   @Tracked((_, v: string) => (!v ? "Required" : undefined))
   accessor status: string = "initial";
@@ -62,7 +58,6 @@ class ValidatedModel extends TrackedObject {
   }
 }
 
-@InitializeTracked
 class RequiredNameModel extends TrackedObject {
   @Tracked((_, v: string) => (!v ? "Name is required" : undefined))
   accessor name: string = ""; // empty default → always invalid on construction
@@ -77,7 +72,7 @@ class RequiredNameModel extends TrackedObject {
 describe("TrackedObject – sequential changes create separate undo steps", () => {
   it("two sequential property changes create two undo steps", () => {
     const tracker = new Tracker();
-    const invoice = new InvoiceModel(tracker);
+    const invoice = tracker.construct(() => new InvoiceModel(tracker));
 
     invoice.status = "active";
     invoice.note = "hello";
@@ -92,7 +87,7 @@ describe("TrackedObject – sequential changes create separate undo steps", () =
 
   it("a property change and a collection mutation create two undo steps", () => {
     const tracker = new Tracker();
-    const invoice = new InvoiceModel(tracker, "active", ["line-1"]);
+    const invoice = tracker.construct(() => new InvoiceModel(tracker, "active", ["line-1"]));
     tracker.onCommit();
 
     invoice.status = "void";
@@ -109,7 +104,7 @@ describe("TrackedObject – sequential changes create separate undo steps", () =
 
   it("two sequential collection mutations create two undo steps", () => {
     const tracker = new Tracker();
-    const invoice = new InvoiceModel(tracker, "", ["a", "b"]);
+    const invoice = tracker.construct(() => new InvoiceModel(tracker, "", ["a", "b"]));
     tracker.onCommit();
 
     invoice.lines.push("c");
@@ -129,7 +124,7 @@ describe("TrackedObject – sequential changes create separate undo steps", () =
 describe("TrackedObject – tracking suppression", () => {
   it("changes inside trackingSuppressed do not create undo entries", () => {
     const tracker = new Tracker();
-    const invoice = new InvoiceModel(tracker);
+    const invoice = tracker.construct(() => new InvoiceModel(tracker));
 
     tracker.withTrackingSuppressed(() => {
       invoice.status = "draft";
@@ -141,7 +136,7 @@ describe("TrackedObject – tracking suppression", () => {
 
   it("changes inside trackingSuppressed do not mark the tracker dirty", () => {
     const tracker = new Tracker();
-    const invoice = new InvoiceModel(tracker);
+    const invoice = tracker.construct(() => new InvoiceModel(tracker));
 
     tracker.withTrackingSuppressed(() => {
       invoice.status = "draft";
@@ -152,7 +147,7 @@ describe("TrackedObject – tracking suppression", () => {
 
   it("values are still applied inside trackingSuppressed", () => {
     const tracker = new Tracker();
-    const invoice = new InvoiceModel(tracker);
+    const invoice = tracker.construct(() => new InvoiceModel(tracker));
 
     tracker.withTrackingSuppressed(() => {
       invoice.status = "draft";
@@ -165,7 +160,7 @@ describe("TrackedObject – tracking suppression", () => {
 
   it("changes after trackingSuppressed are tracked normally", () => {
     const tracker = new Tracker();
-    const invoice = new InvoiceModel(tracker);
+    const invoice = tracker.construct(() => new InvoiceModel(tracker));
 
     tracker.withTrackingSuppressed(() => {
       invoice.status = "draft";
@@ -179,7 +174,7 @@ describe("TrackedObject – tracking suppression", () => {
 
   it("beginSuppressTracking / endSuppressTracking behave identically", () => {
     const tracker = new Tracker();
-    const invoice = new InvoiceModel(tracker);
+    const invoice = tracker.construct(() => new InvoiceModel(tracker));
 
     tracker.beginSuppressTracking();
     invoice.status = "draft";
@@ -197,7 +192,7 @@ describe("TrackedObject – tracking suppression", () => {
 describe("TrackedObject – @Tracked on get/set accessor", () => {
   it("change is tracked and undoable", () => {
     const tracker = new Tracker();
-    const person = new PersonModel(tracker, "Alice");
+    const person = tracker.construct(() => new PersonModel(tracker, "Alice"));
     tracker.onCommit();
 
     person.name = "Bob";
@@ -209,7 +204,7 @@ describe("TrackedObject – @Tracked on get/set accessor", () => {
 
   it("undo then redo restores the change", () => {
     const tracker = new Tracker();
-    const person = new PersonModel(tracker);
+    const person = tracker.construct(() => new PersonModel(tracker));
 
     person.name = "Bob";
     tracker.undo();
@@ -220,7 +215,7 @@ describe("TrackedObject – @Tracked on get/set accessor", () => {
 
   it("setting the same value does not create an undo step", () => {
     const tracker = new Tracker();
-    const person = new PersonModel(tracker, "Alice");
+    const person = tracker.construct(() => new PersonModel(tracker, "Alice"));
     tracker.onCommit();
 
     person.name = "Alice";
@@ -231,7 +226,7 @@ describe("TrackedObject – @Tracked on get/set accessor", () => {
 
   it("changes inside trackingSuppressed are not tracked", () => {
     const tracker = new Tracker();
-    const person = new PersonModel(tracker);
+    const person = tracker.construct(() => new PersonModel(tracker));
 
     tracker.withTrackingSuppressed(() => {
       person.name = "Bob";
@@ -247,7 +242,7 @@ describe("TrackedObject – @Tracked on get/set accessor", () => {
 describe("TrackedObject – isDirtyChanged", () => {
   it("fires with true when the tracker becomes dirty", () => {
     const tracker = new Tracker();
-    const invoice = new InvoiceModel(tracker);
+    const invoice = tracker.construct(() => new InvoiceModel(tracker));
     const calls: boolean[] = [];
     tracker.isDirtyChanged.subscribe((v) => calls.push(v));
 
@@ -258,7 +253,7 @@ describe("TrackedObject – isDirtyChanged", () => {
 
   it("fires with false when the tracker becomes clean", () => {
     const tracker = new Tracker();
-    const invoice = new InvoiceModel(tracker);
+    const invoice = tracker.construct(() => new InvoiceModel(tracker));
     invoice.status = "draft";
     const calls: boolean[] = [];
     tracker.isDirtyChanged.subscribe((v) => calls.push(v));
@@ -270,7 +265,7 @@ describe("TrackedObject – isDirtyChanged", () => {
 
   it("does not fire when isDirty is already true", () => {
     const tracker = new Tracker();
-    const invoice = new InvoiceModel(tracker);
+    const invoice = tracker.construct(() => new InvoiceModel(tracker));
     invoice.status = "draft";
     const calls: boolean[] = [];
     tracker.isDirtyChanged.subscribe((v) => calls.push(v));
@@ -282,7 +277,7 @@ describe("TrackedObject – isDirtyChanged", () => {
 
   it("does not fire when isDirty is already false", () => {
     const tracker = new Tracker();
-    new InvoiceModel(tracker);
+    tracker.construct(() => new InvoiceModel(tracker));
     const calls: boolean[] = [];
     tracker.isDirtyChanged.subscribe((v) => calls.push(v));
 
@@ -295,7 +290,7 @@ describe("TrackedObject – isDirtyChanged", () => {
 describe("TrackedObject – isValidChanged", () => {
   it("fires with false when the tracker becomes invalid", () => {
     const tracker = new Tracker();
-    const model = new ValidatedModel(tracker);
+    const model = tracker.construct(() => new ValidatedModel(tracker));
     tracker.onCommit();
     const calls: boolean[] = [];
     tracker.isValidChanged.subscribe((v) => calls.push(v));
@@ -307,7 +302,7 @@ describe("TrackedObject – isValidChanged", () => {
 
   it("fires with true when the tracker becomes valid again", () => {
     const tracker = new Tracker();
-    const model = new ValidatedModel(tracker);
+    const model = tracker.construct(() => new ValidatedModel(tracker));
     model.status = "";
     const calls: boolean[] = [];
     tracker.isValidChanged.subscribe((v) => calls.push(v));
@@ -319,7 +314,7 @@ describe("TrackedObject – isValidChanged", () => {
 
   it("does not fire when isValid is already false", () => {
     const tracker = new Tracker();
-    const model = new ValidatedModel(tracker);
+    const model = tracker.construct(() => new ValidatedModel(tracker));
     model.status = "";
     const calls: boolean[] = [];
     tracker.isValidChanged.subscribe((v) => calls.push(v));
@@ -331,7 +326,7 @@ describe("TrackedObject – isValidChanged", () => {
 
   it("does not fire when isValid is already true", () => {
     const tracker = new Tracker();
-    const model = new ValidatedModel(tracker);
+    const model = tracker.construct(() => new ValidatedModel(tracker));
     const calls: boolean[] = [];
     tracker.isValidChanged.subscribe((v) => calls.push(v));
 
@@ -344,7 +339,7 @@ describe("TrackedObject – isValidChanged", () => {
 describe("TrackedObject – canCommitChanged", () => {
   it("fires with true when isDirty becomes true and isValid is already true", () => {
     const tracker = new Tracker();
-    const invoice = new InvoiceModel(tracker);
+    const invoice = tracker.construct(() => new InvoiceModel(tracker));
     const calls: boolean[] = [];
     tracker.canCommitChanged.subscribe((v) => calls.push(v));
 
@@ -355,7 +350,7 @@ describe("TrackedObject – canCommitChanged", () => {
 
   it("fires with false when isDirty becomes false", () => {
     const tracker = new Tracker();
-    const invoice = new InvoiceModel(tracker);
+    const invoice = tracker.construct(() => new InvoiceModel(tracker));
     invoice.status = "draft";
     const calls: boolean[] = [];
     tracker.canCommitChanged.subscribe((v) => calls.push(v));
@@ -367,7 +362,7 @@ describe("TrackedObject – canCommitChanged", () => {
 
   it("fires with false when isValid becomes false while isDirty is true", () => {
     const tracker = new Tracker();
-    const model = new ValidatedModel(tracker);
+    const model = tracker.construct(() => new ValidatedModel(tracker));
     model.status = "active";
     const calls: boolean[] = [];
     tracker.canCommitChanged.subscribe((v) => calls.push(v));
@@ -379,7 +374,7 @@ describe("TrackedObject – canCommitChanged", () => {
 
   it("does not fire when isDirty becomes true but isValid is false", () => {
     const tracker = new Tracker();
-    const model = new ValidatedModel(tracker);
+    const model = tracker.construct(() => new ValidatedModel(tracker));
     tracker.withTrackingSuppressed(() => { model.status = ""; });
     tracker.revalidate();
     const calls: boolean[] = [];
@@ -392,7 +387,7 @@ describe("TrackedObject – canCommitChanged", () => {
 
   it("does not fire when a second change is made while already dirty and valid", () => {
     const tracker = new Tracker();
-    const invoice = new InvoiceModel(tracker);
+    const invoice = tracker.construct(() => new InvoiceModel(tracker));
     invoice.status = "draft";
     const calls: boolean[] = [];
     tracker.canCommitChanged.subscribe((v) => calls.push(v));
@@ -403,56 +398,63 @@ describe("TrackedObject – canCommitChanged", () => {
   });
 });
 
-// ---- Bulk construction ----
+// ---- TrackedObject – construct() ----
 
-describe("TrackedObject – bulk construction with withTrackingSuppressed", () => {
-  it("isValid is stale (not updated) while construction is suppressed", () => {
+describe("TrackedObject – construct()", () => {
+  it("validates all objects and updates tracker.isValid after the lambda", () => {
     const tracker = new Tracker();
     expect(tracker.isValid).toBe(true);
 
-    tracker.withTrackingSuppressed(() => {
-      new RequiredNameModel(tracker); // invalid: name = ""
-    });
-
-    // revalidate() was skipped — isValid has not been updated yet
-    expect(tracker.isValid).toBe(true);
-  });
-
-  it("isValid is correct after manual revalidate() following suppressed bulk construction", () => {
-    const tracker = new Tracker();
-
-    tracker.withTrackingSuppressed(() => {
-      new RequiredNameModel(tracker);
-      new RequiredNameModel(tracker);
-      new RequiredNameModel(tracker);
-    });
-
-    tracker.revalidate();
+    tracker.construct(() => new RequiredNameModel(tracker));
 
     expect(tracker.isValid).toBe(false);
   });
 
-  it("single construction without outer suppression updates isValid immediately", () => {
+  it("suppresses tracking during construction (canUndo is false)", () => {
     const tracker = new Tracker();
 
-    new RequiredNameModel(tracker); // revalidate() runs inside @InitializeTracked
+    tracker.construct(() => new RequiredNameModel(tracker));
 
-    expect(tracker.isValid).toBe(false);
+    expect(tracker.canUndo).toBe(false);
   });
 
-  it("bulk construction then revalidate produces the same validity as sequential construction", () => {
-    const tracker1 = new Tracker();
-    tracker1.withTrackingSuppressed(() => {
-      new RequiredNameModel(tracker1);
-      new RequiredNameModel(tracker1);
+  it("returns the constructed object", () => {
+    const tracker = new Tracker();
+
+    const model = tracker.construct(() => new RequiredNameModel(tracker));
+
+    expect(model).toBeInstanceOf(RequiredNameModel);
+    expect(tracker.trackedObjects).toContain(model);
+  });
+
+  it("throws when constructing outside construct()", () => {
+    const tracker = new Tracker();
+
+    expect(() => new RequiredNameModel(tracker)).toThrow();
+  });
+
+  it("handles multiple objects (only one revalidation at the end)", () => {
+    const tracker = new Tracker();
+
+    const models = tracker.construct(() => {
+      const a = new RequiredNameModel(tracker);
+      const b = new RequiredNameModel(tracker);
+      const c = new RequiredNameModel(tracker);
+      return [a, b, c];
     });
-    tracker1.revalidate();
 
-    const tracker2 = new Tracker();
-    new RequiredNameModel(tracker2);
-    new RequiredNameModel(tracker2);
+    expect(tracker.trackedObjects.length).toBe(3);
+    expect(tracker.isValid).toBe(false);
+    expect(tracker.canUndo).toBe(false);
+  });
 
-    expect(tracker1.isValid).toBe(tracker2.isValid);
-    expect(tracker1.trackedObjects.length).toBe(tracker2.trackedObjects.length);
+  it("isValid correctly reflects validity after construct() with invalid objects", () => {
+    const tracker = new Tracker();
+
+    tracker.construct(() => new RequiredNameModel(tracker));
+    tracker.construct(() => new RequiredNameModel(tracker));
+
+    expect(tracker.isValid).toBe(false);
+    expect(tracker.trackedObjects.length).toBe(2);
   });
 });

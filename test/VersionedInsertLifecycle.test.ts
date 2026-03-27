@@ -2,12 +2,10 @@ import { describe, it, expect } from "vitest";
 import { VersionedTrackedObject } from "../src/VersionedTrackedObject";
 import { VersionedObjectState } from "../src/VersionedObjectState";
 import { Tracker } from "../src/Tracker";
-import { InitializeTracked } from "../src/InitializeTracked";
 import { Tracked } from "../src/Tracked";
 import { ExternallyAssigned } from "../src/ExternallyAssigned";
 import { TrackedCollection } from "../src/TrackedCollection";
 
-@InitializeTracked
 class ItemModel extends VersionedTrackedObject {
   @ExternallyAssigned
   id: number = 0;
@@ -23,7 +21,7 @@ class ItemModel extends VersionedTrackedObject {
 describe("VersionedTrackedObject — insert lifecycle with @ExternallyAssigned", () => {
   it("insert → save → edit → edit → save → edit → undo×4 → re-save → redo → undo → redo → save", () => {
     const tracker = new Tracker(undefined); // coalescing disabled: each change = its own op
-    const item = new ItemModel(tracker, VersionedObjectState.New);
+    const item = tracker.construct(() => new ItemModel(tracker, VersionedObjectState.New));
 
     // 1. Create
     expect(item.state).toBe(VersionedObjectState.New);
@@ -110,7 +108,7 @@ describe("VersionedTrackedObject — insert lifecycle with @ExternallyAssigned",
 
   it("removing an InsertReverted object from a collection resets id and treats it as never-existed", () => {
     const tracker = new Tracker(undefined);
-    const item = new ItemModel(tracker, VersionedObjectState.New);
+    const item = tracker.construct(() => new ItemModel(tracker, VersionedObjectState.New));
     const collection = new TrackedCollection<ItemModel>(tracker, [item]);
 
     // Save (insert)

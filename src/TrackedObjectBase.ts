@@ -41,6 +41,9 @@ export abstract class TrackedObjectBase implements ITracked {
   }
 
   public constructor(public readonly tracker: Tracker) {
+    if (process.env.NODE_ENV !== 'production' && !tracker.isConstructing) {
+      throw new Error(`${this.constructor.name} must be created inside tracker.construct()`);
+    }
     this.validationMessages = new Map<string, string>();
     tracker.trackObject(this);
   }

@@ -27,6 +27,7 @@ export class Tracker {
   private _canCommit: boolean;
   private _externallyAssignedPlaceholderCounter = -1;
   private _invalidCount = 0;
+  private _constructionDepth = 0;
 
   public readonly coalescingWindowMs: number | undefined;
 
@@ -94,6 +95,10 @@ export class Tracker {
     return this._suppressTrackingCounter > 0;
   }
 
+  public get isConstructing(): boolean {
+    return this._constructionDepth > 0;
+  }
+
   public constructor(coalescingWindowMs: number | undefined = 3000) {
     this.coalescingWindowMs = coalescingWindowMs;
     this._currentOperation = undefined;
@@ -141,6 +146,20 @@ export class Tracker {
     }
   }
 
+  public construct<T>(action: () => T): T {
+    const objectsBefore = this.trackedObjects.length;
+    this._constructionDepth++;
+    this._suppressTrackingCounter++;
+    const result = action();
+    for (let i = objectsBefore; i < this.trackedObjects.length; i++) {
+      validate(this.trackedObjects[i]);
+    }
+    this._suppressTrackingCounter--;
+    this._constructionDepth--;
+    this.isValid = this._invalidCount === 0;
+    return result;
+  }
+
   public withTrackingSuppressed(action: () => void): void {
     this._suppressTrackingCounter++;
     action();
@@ -162,7 +181,9 @@ export class Tracker {
   ): void {
     if (this.isTrackingSuppressed) {
       redoAction();
-      this.revalidate();
+      if (!this.isConstructing) {
+        this.revalidate();
+      }
       return;
     }
 
